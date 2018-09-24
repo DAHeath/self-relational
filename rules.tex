@@ -1,0 +1,114 @@
+\documentclass{article}
+
+\usepackage{amsmath}
+\usepackage{semantic}
+\usepackage{mathtools}
+\usepackage{fullpage}
+
+\newcommand{\triple}[3]{\{#1\}~#2~\{#3\}}
+\newcommand{\ppart}[3]{#1~\textsf{part}~#2\cdot#3}
+\newcommand{\judges}{\vdash}
+\newcommand{\judgement}[4]{#1 \judges \triple{#2}{#3}{#4}}
+
+\newcommand{\cif}[3]{\textsf{if}~#1~\textsf{then}~#2~\textsf{else}~#3~\textsf{fi}}
+\newcommand{\cwhile}[2]{\textsf{while}~#1~\textsf{do}~#2~\textsf{done}}
+\newcommand{\cskip}{\textsf{skip}}
+
+\newcommand{\commute}{\textsf{commute}}
+\newcommand{\associate}{\textsf{associate}}
+\newcommand{\pairwise}{\textsf{pairwise}}
+
+\begin{document}
+
+The space of states is defined inductively as follows:
+
+\[ \sigma ::= \sigma \otimes \sigma~|~x \rightarrow \nu \]
+
+That is, a state is either a product of two states, or is a mapping from
+variables to values.
+
+An assertion ($P$, $Q$, etc) is a mapping from states to propositions,
+as in traditional Hoare Logic:
+\[P : \sigma \rightarrow \textsf{Prop}\]
+
+\begin{spreadlines}{10pt}
+\begin{gather*}
+  \inference[\textsc{Part}]{%
+    \ppart{c_0}{c_1}{c_2}&
+    \judgement{\Gamma}{P}{c_1}{R}\\
+    \judgement{\Gamma}{\pairwise~P~R}{c_1 \times c_2}{\pairwise~R~Q}
+  }{%
+    \judgement{\Gamma}{P}{c_0}{Q}
+  }
+  \\
+  \inference[\textsc{Split}]{%
+    \judgement{\Gamma}{P_0}{c_0}{Q_0}&
+    \forall st_0, st_1.~P~(st_0 \otimes st_1) \Rightarrow P_0~st_0 \land P_1~st_1\\
+    \judgement{\Gamma}{P_1}{c_1}{Q_1}&
+    \forall st_0, st_1.~Q~(st_0 \otimes st_1) ~\Leftarrow Q_0~st_0 \land Q_1~st_1\\
+  }{%
+    \judgement{\Gamma}{P}{c_0 \times c_1}{Q}
+  }
+  \\
+  \inference[\textsc{Comm}]{%
+    \judgement{\Gamma}{\commute~P}{c_1 \times c_0}{\commute~Q}
+  }{%
+    \judgement{\Gamma}{P}{c_0 \times c_1}{Q}
+  }
+  \qquad
+  \inference[\textsc{Assoc}]{%
+    \judgement{\Gamma}{\associate~P}{(c_0 \times c_1) \times c_2}{\associate~Q}
+  }{%
+    \judgement{\Gamma}{P}{c_0 \times (c_1 \times c_2)}{Q}
+  }
+  \\
+  \inference[$\textsc{If}$]{%
+    \judgement{\Gamma}{P \land ~~e}{c_0 \times c_2}{Q}\\
+    \judgement{\Gamma}{P \land \neg e}{c_1 \times c_2}{Q}
+  }{%
+    \judgement{\Gamma}{P}{\cif{e}{c_0}{c_1} \times c_2}{Q}
+  }
+  \\
+  \inference[$\textsc{While}$]{%
+    \judgement{%
+      \Gamma \cup \triple{P}{\cwhile{e}{c_0} \times c_1}{Q \land \neg e}
+    }{P}{\cif{e}{c_0}{\cskip}~;~\cwhile{e}{c_0} \times c_1}{Q}
+  }{%
+    \judgement{\Gamma}{P}{\cwhile{e}{c_0} \times c_1}{Q \land \neg e}
+  }
+\end{gather*}
+\end{spreadlines}
+
+\begin{align*}
+  \pairwise~P~Q~(\sigma_0\otimes\sigma_1) &:= P~\sigma_0 \land Q~\sigma_1\\
+  \commute~P~(\sigma_0 \otimes \sigma_1) &:= P~(\sigma_1 \otimes \sigma_0)\\
+  \associate~P~((\sigma_0 \otimes \sigma_1) \otimes \sigma_2)) &:=
+    P~(\sigma_0 \otimes (\sigma_1 \otimes \sigma_2))
+\end{align*}
+
+\begin{spreadlines}{10pt}
+\begin{gather*}
+  \inference[E-Prod]{%
+    (c_0, st_0) \Downarrow (st_0')&
+    (c_1, st_1) \Downarrow (st_1')
+  }{%
+    (c_0 \times c_1, st_0 \otimes st_1) \Downarrow (st_0' \otimes st_1')
+  }
+\end{gather*}
+\end{spreadlines}
+
+A more typical sequencing rule can be derived from $\textsc{Part}$ and
+$\textsc{Split}$:
+
+\[
+  \inference[\textsc{Seq}]{%
+    \ppart{c_0}{c_1}{c_2}&
+    \judgement{\Gamma}{P}{c_1}{R}&
+    \judgement{\Gamma}{R}{c_2}{Q}
+  }{%
+    \judgement{\Gamma}{P}{c_0}{Q}
+  }
+\]
+
+
+\end{document}
