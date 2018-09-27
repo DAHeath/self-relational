@@ -1,3 +1,8 @@
 .stack-work/
 eql.cabal
 *~
+.DS_STORE
+*.log
+*.pdf
+*.aux
+*.glob

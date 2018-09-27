@@ -113,7 +113,7 @@ Inductive ceval : com -> state -> state -> Prop :=
 | EProd : forall st1 st1' st2 st2' c1 c2,
     ceval c1 st1 st1' ->
     ceval c2 st2 st2' ->
-    ceval (cprod c1 c2) (composite st1 st2) (composite st1' st2')
+    ceval (cprod c1 c2) (composite st1 st2) (composite st1' st2').
 Hint Constructors ceval.
 
 Definition Assertion := state -> Prop.
@@ -135,7 +135,6 @@ Definition bassn b : Assertion :=
   fun st => match st with
             | singleton s => (beval s b = true)
             | composite _ _ => False
-            | True => False
             end.
 
 Theorem skip : forall P, {{P}} cskip {{P}}.
@@ -212,7 +211,11 @@ Inductive partition : com -> com -> com -> Prop :=
 | PSeq : forall c0 c1,
     partition c0 c1 (cseq c0 c1)
 | PSkipL : forall c, partition cskip c c
-| PSkipR : forall c, partition c cskip c.
+| PSkipR : forall c, partition c cskip c
+| PProd : forall c0 c1 c0' c0'' c1' c1'',
+    partition c0' c0'' c0 ->
+    partition c1' c1'' c1 ->
+    partition (cprod c0' c1') (cprod c0'' c1'') (cprod c0 c1).
 
 Lemma seqassoc : forall c0 c0' c0'' st st',
   ceval (cseq c0 (cseq c0' c0'')) st st' <->
@@ -245,6 +248,19 @@ Proof.
   - split; intros.
     + eapply ESeq. apply H. apply ESkip.
     + inversion H; subst. inversion H5; subst. assumption.
+  - split; intros.
+    + inversion H1; subst.
+      apply IHpartition1 in H4.
+      apply IHpartition2 in H7.
+      inversion H4; subst.
+      inversion H7; subst.
+      econstructor; eauto.
+    + inversion H1; subst.
+      inversion H4; subst.
+      inversion H7; subst.
+      constructor.
+      apply IHpartition1; eauto.
+      apply IHpartition2; eauto.
 Qed.
 
 Definition pairwise (P:Assertion) (Q:Assertion) : Assertion :=
@@ -253,76 +269,21 @@ Definition pairwise (P:Assertion) (Q:Assertion) : Assertion :=
             | composite st0 st1 => P st0 /\ Q st1
             end.
 
-Lemma splitting : forall (A : Type) (P Q : A -> A -> Prop),
-  (forall a b c d, P a b /\ Q c d) <-> (forall a b, P a b) /\ (forall c d, Q c d).
-Proof.
-  intuition; apply H; auto.
-Qed.
-
-Theorem pairing' : forall (P Q R S : Assertion) c0 c1 st0 st1,
-  ceval c1 st0 st1 -> Q st0 ->
-  {{pairwise P Q}} cprod c0 c1 {{pairwise R S}} ->
-  {{P}}c0{{R}}.
-Proof.
-  unfold triple; intros.
-  assert (pairwise R S (composite st' st1)).
-  eapply H1.
-  constructor; eauto.
-  simpl; eauto.
-  simpl in H4; apply H4.
-Qed.
-
-(* How do I know that the state of c0 does not refer to the state of c1? *)
-Lemma pairwise_split : forall P Q R S c0 c1,
-  ({{P}} c0 {{R}} /\ {{Q}} c1 {{S}}) <->
-  {{pairwise P Q}} cprod c0 c1 {{pairwise R S}}.
-Proof.
-  unfold triple; split; intros.
-  - inversion H; clear H.
-    inversion H0; subst; clear H0.
-    simpl in *; split.
-    + eapply H2. eauto. apply H1.
-    + eapply H3. eauto. apply H1.
-  - Check consequence.
-    apply splitting.
-    intros.
-    assert
-      (ceval c0 a b /\ ceval c1 c d -> P a -> Q c -> R b /\ S d).
-    + intros.
-      assert (pairwise R S (composite b d)).
-      eapply H.
-      constructor; apply H0.
-      simpl; auto.
-      simpl in H3; auto.
-    + split.
-    apply (composite a b) (composite c d) H.
-    apply split_composite.
-    Check EProd.
-    apply H.
-
-Axiom pairing' : forall P Q R S c0 c1,
-  {{pairwise P Q}} cprod c0 c1 {{pairwise R S}} ->
-  {{P}}c0{{R}}.
-
 Theorem part : forall P Q R c0 c1 c2,
   partition c1 c2 c0 ->
-  (* {{P}} c1 {{R}} -> *)
+  {{P}} c1 {{R}} ->
   {{pairwise P R}} cprod c1 c2 {{pairwise R Q}} ->
   {{P}} c0 {{Q}}.
 Proof.
-  intros.
-  assert ({{P}} c1 {{R}}).
-  - eapply pairing'.
-    apply H0.
-  - unfold triple in *; intros.
-    apply (partdeterm c1 c2 c0 st st' H) in H2. inversion H2; subst.
-    assert (ceval (cprod c1 c2) (composite st st'0) (composite st'0 st')).
-    + constructor; assumption.
-    + apply (H0 (composite st st'0) (composite st'0 st') H4).
-      unfold pairwise.
-      split.
-      * assumption.
-      * apply H1 with st; auto.
+  unfold triple; intros.
+  apply (partdeterm c1 c2 c0 st st' H) in H2. inversion H2; subst.
+  assert (ceval (cprod c1 c2) (composite st st'0) (composite st'0 st')).
+  - constructor; assumption.
+  - apply (H1 (composite st st'0) (composite st'0 st') H4).
+    unfold pairwise.
+    split.
+    + assumption.
+    + apply H0 with st; auto.
 Qed.
 
 Definition commute (P:Assertion) : Assertion :=
@@ -367,15 +328,26 @@ Proof.
     assumption.
 Qed.
 
-Theorem split : forall t (P Q P0 P1 Q0 Q1 : Assertion) c0 c1,
+Theorem split : forall (P Q P0 P1 Q0 Q1 : Assertion) c0 c1,
   (forall st0 st1, P (composite st0 st1) -> (P0 st0 /\ P1 st1)) ->
   (forall st0 st1, (Q0 st0 /\ Q1 st1) -> Q (composite st0 st1)) ->
-  t |- {{P0}} c0 {{Q0}} ->
-  t |- {{P1}} c1 {{Q1}} ->
-  t |- {{P}} cprod c0 c1 {{Q}}.
+  {{P0}} c0 {{Q0}} ->
+  {{P1}} c1 {{Q1}} ->
+  {{P}} cprod c0 c1 {{Q}}.
 Proof.
-  unfold triple.intros.
+  unfold triple; intros.
   inversion H3; subst.
   apply H0.
   split; repeat (try (eapply H2); try (eapply H1); try (eapply H); eauto).
+Qed.
+
+Theorem seq : forall (P Q R : Assertion) c0 c1 c2,
+  partition c1 c2 c0 ->
+  {{P}} c1 {{Q}} ->
+  {{Q}} c2 {{R}} ->
+  {{P}} c0 {{R}}.
+Proof.
+  intros.
+  eapply part; eauto.
+  eapply split; simpl; eauto.
 Qed.
