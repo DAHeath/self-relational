@@ -4,8 +4,13 @@ module CHoare where
 
 import           Control.Monad.State
 import           Control.Monad.Writer
+import           Control.Monad.Reader
 import qualified Data.Set as S
 import           Data.Set (Set)
+import qualified Data.Map as M
+import           Data.Map (Map)
+import           Prelude hiding (seq)
+import           Data.Maybe (mapMaybe, listToMaybe)
 
 type Var = String
 
@@ -65,13 +70,29 @@ psubst :: Var -> Expr -> Prop -> Prop
 psubst v e = \case
   PTrue -> PTrue
   PFalse -> PFalse
-  PImpl p1 p2 -> PImpl (psubst v e p1) (psubst v e p2)
-  PAnd p1 p2 -> PAnd (psubst v e p1) (psubst v e p2)
-  PNot p -> PNot (psubst v e p)
+  PImpl p1 p2 -> PImpl (go p1) (go p2)
+  PAnd p1 p2 -> PAnd (go p1) (go p2)
+  PNot p -> PNot (go p)
   PEql e1 e2 -> PEql (esubst v e e1) (esubst v e e2)
   PLt e1 e2 -> PLt (esubst v e e1) (esubst v e e2)
   PRel n es -> PRel n (map (esubst v e) es)
-  PProd p1 p2 -> PProd (psubst v e p1) (psubst v e p2)
+  PProd p1 p2 -> PProd (go p1) (go p2)
+  where
+    go = psubst v e
+
+relSubst :: Map Var Prop -> Prop -> Prop
+relSubst m = \case
+  PTrue -> PTrue
+  PFalse -> PFalse
+  PImpl p1 p2 -> PImpl (go p1) (go p2)
+  PAnd p1 p2 -> PAnd (go p1) (go p2)
+  PNot p -> PNot (go p)
+  PEql e1 e2 -> PEql e1 e2
+  PLt e1 e2 -> PLt e1 e2
+  PRel n es -> M.findWithDefault (PRel n es) n m
+  PProd p1 p2 -> PProd (go p1) (go p2)
+  where
+    go = relSubst m
 
 data Com
   = Skip
@@ -83,7 +104,123 @@ data Com
   | Prod Com Com {- NEW -}
   deriving (Show, Read, Eq, Ord)
 
-{- NEW -}
+data Triple = Triple Prop Com Prop
+  deriving (Show, Read, Eq, Ord)
+
+-- | A working proof.
+data Proof
+  = SKIP
+  | ASSIGN
+  | IF Prop {- branch precondition -} Proof Proof
+  | WHILE Com Prop Proof
+  | ASSOC Proof
+  | COMM Proof
+  | PARTITION Prop Com Com Proof Proof
+  | SPLIT Prop {- P0 -} Prop {- Q0 -} Prop {- P1 -} Prop {- Q1 -} Proof Proof
+  | FAIL -- The proof that is trivially invalid.
+  | CHOICE [Proof] -- The proof which is valid if any of its arguments are valid.
+  | COVER Com Bool {- memoization of implication -} Prop
+  deriving (Show, Read, Eq, Ord)
+
+inductive :: Proof -> Maybe Proof
+inductive = \case
+  SKIP -> Just SKIP
+  ASSIGN -> Just ASSIGN
+  IF p pr0 pr1 -> IF p <$> inductive pr0 <*> inductive pr1
+  WHILE c inv pr0 -> WHILE c inv <$> inductive pr0
+  ASSOC pr0 -> ASSOC <$> inductive pr0
+  COMM pr0 -> COMM <$> inductive pr0
+  PARTITION r c0 c1 pr0 pr1 -> PARTITION r c0 c1 <$> inductive pr0 <*> inductive pr1
+  SPLIT p0 q0 p1 q1 pr0 pr1 -> SPLIT p0 q0 p1 q1 <$> inductive pr0 <*> inductive pr1
+  FAIL -> Nothing
+  CHOICE prs -> listToMaybe $ mapMaybe inductive prs
+  COVER c b inv -> if b then Just (COVER c b inv) else Nothing
+
+-- | Calculate a covering in the proof: That is, look at the while loop
+-- invariants and check if one is covered by a previous version.
+cover :: Proof -> Proof
+cover p = runReader (cover' p) M.empty
+
+cover' :: Proof -> Reader (Map Com (Set Prop)) Proof
+cover' = \case
+  SKIP -> pure SKIP
+  ASSIGN -> pure ASSIGN
+  WHILE c inv proof' -> local (M.insertWith S.union c (S.singleton inv))
+    $ WHILE c inv <$> cover' proof'
+  COVER c _ inv -> do
+    invs <- asks (M.findWithDefault S.empty c)
+    let covered = foldr PAnd PTrue invs `implies` inv
+    pure $ COVER c covered inv
+  ASSOC proof' -> ASSOC <$> cover' proof'
+  COMM proof' -> COMM <$> cover' proof'
+  PARTITION r c0 c1 proof' proof'' -> PARTITION r c0 c1 <$> cover' proof' <*> cover' proof''
+  SPLIT p0 q0 p1 q1 proof0 proof1 -> SPLIT p0 q0 p1 q1 <$> cover' proof0 <*> cover' proof1
+  (FAIL) -> pure FAIL
+  CHOICE proofs -> CHOICE <$> mapM cover' proofs
+  _ -> pure FAIL
+
+-- | Replace each relational predicate in the proof by its definition.
+populate :: Map Var Prop -> Proof -> Proof
+populate m = \case
+  SKIP -> SKIP
+  ASSIGN -> ASSIGN
+  IF p pr0 pr1 -> IF (relSubst m p) (go pr0) (go pr1)
+  WHILE c p pr0 -> WHILE c (relSubst m p) (go pr0)
+  ASSOC pr0 -> ASSOC (go pr0)
+  COMM pr0 -> COMM (go pr0)
+  PARTITION p c0 c1 pr0 pr1 -> PARTITION (relSubst m p) c0 c1 (go pr0) (go pr1)
+  SPLIT p0 q0 p1 q1 pr0 pr1 ->
+    SPLIT (relSubst m p0)
+          (relSubst m q0)
+          (relSubst m p1)
+          (relSubst m q1)
+          (go pr0)
+          (go pr1)
+  FAIL -> FAIL
+  CHOICE prs -> CHOICE (map go prs)
+  COVER c b p -> COVER c b (relSubst m p)
+  where
+    go = populate m
+
+replay :: Triple -> Proof -> WriterT [Prop] (State Int) Proof
+replay (Triple p c q) proof =
+  case (c, proof) of
+    (_, FAIL) -> extend (Triple p c q)
+    _ -> undefined
+
+extend :: Triple -> WriterT [Prop] (State Int) Proof
+extend = undefined
+
+solveChc :: [Prop] -> Either (Map Var Prop) (Map Var Prop)
+solveChc = undefined
+
+implies :: Prop -> Prop -> Bool
+implies = undefined
+
+-- | The core loop. Construct a larger CHC system by replaying the proof,
+-- extending it at each underapproximation. Then, solve the CHC system and
+-- search for an inductive proof.
+loop :: Triple -> Proof -> State Int (Either (Map Var Prop) Proof)
+loop triple proof = do
+  (proof', chc) <- runWriterT (replay triple proof)
+  case solveChc chc of
+    -- If there is a counterexample, we are done.
+    Left counterexample -> pure (Left counterexample)
+    -- Otherwise, we examine the model for inductiveness.
+    Right model -> -- Construct a version of the proof where predicates have been
+                   -- substituted by their definition. Check if this proof has
+                   -- inductive loop invariants.
+                   case inductive (cover (populate model proof')) of
+                      -- If there is a complete proof, we are done.
+                      Just theProof -> pure $ Right theProof
+                      -- Otherwise, loop over the larger proof.
+                      Nothing -> loop triple proof'
+
+-- | Run the core loop starting from an underapproximation of a potential
+-- proof, the proof which is trivially invalid.
+proofHound :: Triple -> Either (Map Var Prop) Proof
+proofHound triple = evalState (loop triple FAIL) 0
+
 isSimple :: Com -> Bool
 isSimple = \case
   While{} -> False
@@ -91,6 +228,11 @@ isSimple = \case
   Seq c0 c1 -> isSimple c0 && isSimple c1
   Prod c0 c1 -> isSimple c0 && isSimple c1
   _ -> True
+
+isSeq :: Com -> Bool
+isSeq = \case
+  Seq{} -> True
+  _ -> False
 
 cvocab :: Com -> Set Var
 cvocab = \case
@@ -100,6 +242,7 @@ cvocab = \case
   Seq c1 c2 -> cvocab c1 `S.union` cvocab c2
   While p c -> pvocab p `S.union` cvocab c
   Prod c1 c2 -> cvocab c1 `S.union` cvocab c2
+  Assert p -> pvocab p
 
 mkRel :: MonadState Integer m => Set Var -> m Prop
 mkRel voc = do
@@ -111,53 +254,73 @@ clause :: Prop -> Prop -> Prop
 clause pre post =
   foldr PForall (PImpl pre post) (pvocab (PAnd pre post))
 
--- Partition the command such that each part (except the first!) has a
--- non-simple command as its first element.
-partition :: Com -> [Com]
-partition (Seq (Seq c0 c1) c2) = partition (Seq c0 (Seq c1 c2))
-partition (Seq c0 c1) =
-  let p:ps = partition c1 in
-  if isSimple c0
-   then Seq c0 p:ps
-   else Skip:Seq c0 p:ps
-partition c =
-  if isSimple c then [c] else [Skip, c]
+partitions :: Com -> [(Com, Com)]
+partitions (Seq c0 c1) =
+  let ps0 = do
+        (c0', c0'') <- if not (isSimple c0 || isSeq c0)
+                       then [(c0, Skip)]
+                       else partitions c0
+        pure (c0', c0'' `Seq` c1)
+      ps1 = do
+        (c1', c1'') <- if not (isSimple c1 || isSeq c1)
+                       then [(Skip, c1)]
+                       else partitions c1
+        pure (c0 `Seq` c1', c1'')
+   in ps0 ++ ps1
+partitions (Prod c0 c1) = do
+  (c0', c0'') <- partitions c0 ++ [(c0, Skip)]
+  (c1', c1'') <- partitions c1 ++ [(c1, Skip)]
+  if c0'' == Skip && c1'' == Skip
+  then []
+  else pure (c0' `Prod` c1', c0'' `Prod` c1'')
+partitions _ = []
 
-hoare' :: (Com, Prop) -> StateT Integer (Writer [Prop]) (Com, Prop)
-hoare' (c, q) =
-  case c of
-    Skip -> pure (Skip, q)
-    Assign v e -> pure (Skip, psubst v e q)
-    If cond c1 c2 ->
-      if isSimple c then do
-        p <- mkRel (cvocab c `S.union` pvocab q)
-        (_, q0) <- hoare' (c1, q)
-        (_, q1) <- hoare' (c2, q)
-        tell [ clause (PAnd p cond) q0
-             , clause (PAnd p (PNot cond)) q1
-             ]
-        pure (Skip, p)
-      else pure (c, q)
-    Seq (Seq c0 c1) c2 -> hoare' (Seq c0 (Seq c1 c2), q)
-    Seq c0 c1 -> do
-      (_, r) <- hoare' (c1, q)
-      hoare' (c0, r)
-    While{} -> pure (c, q)
-    Assert cond -> pure (Skip, cond)
+chunk :: Triple -> StateT Integer (Writer [Prop]) Triple
+chunk (Triple p c q) =
+  case partitions c of
+    [] -> pure (Triple p c q)
+    ((c0, c1):_) -> do
+       r <- mkRel (S.unions [cvocab c, pvocab p, pvocab q])
+       chunk $ Triple (PProd p r) (c0 `Prod` c1) (PProd r q)
 
--- TESTING
-hoare :: Com -> IO [Prop]
-hoare c = case runWriter (evalStateT (hoare' (c, PTrue)) 0) of
-            ((c, p), ps) -> do
-              print c
-              pure (foldr PForall p (pvocab p) : ps)
+part :: Com -> Com
+part c
+  | isSimple c = c
+  | otherwise =
+    case c of
+      Seq a b ->
+        case (assocRight $ part a, assocLeft $ part b) of
+          (Prod a0 a1, Prod b0 b1) ->
+            if isSimple a1 && isSimple b0
+            then Prod a0 (Prod (Seq a1 b0) b1)
+            else foldr1 Prod [a0, a1, b0, b1]
+          (a0, Prod b0 b1) ->
+            if isSimple a0 && isSimple b0
+            then Prod (Seq a0 b0) b1
+            else foldr1 Prod [a0, b0, b1]
+          (Prod a0 a1, b0) ->
+            if isSimple a1 && isSimple b0
+            then Prod a0 (Seq a1 b0)
+            else foldr1 Prod [a0, a1, b0]
+          (a0, b0) -> Prod a0 b0
+      Prod a b -> Prod (part a) (part b)
+      c -> c
 
-choare' :: Com -> Prop -> StateT Integer (Writer [Prop]) Prop
-choare' c q =
-  case c of
-    Skip -> pure q
-    Assign v e -> pure (psubst v e q)
-    Assert cond -> pure cond
+assocLeft :: Com -> Com
+assocLeft = \case
+  Prod c0 c1 ->
+    case assocLeft c0 of
+      Prod c0' c0'' -> Prod c0' (Prod c0'' c1)
+      _ -> Prod c0 c1
+  c -> c
+
+assocRight :: Com -> Com
+assocRight = \case
+  Prod c0 c1 ->
+    case assocRight c1 of
+      Prod c1' c1'' -> Prod (Prod c0 c1') c1''
+      _ -> Prod c0 c1
+  c -> c
 
 example :: Com
 example =
@@ -173,4 +336,33 @@ example =
     ( Assign "sum1" (Add (V "sum1") (V "i")) `Seq`
       Assign "i" (Sub (V "i") (Lit 1))
     ) `Seq`
-  Assert (PNot (PEql (V "x") (Lit 41)))
+  Assert (PEql (V "sum0") (V "sum1"))
+
+chunk' :: IO ()
+chunk' =
+  case runWriter (evalStateT (chunk examplet) 0) of
+    (Triple p c q, ps) -> putStrLn (showCom c)
+
+examplet :: Triple
+examplet = Triple PTrue example PTrue
+
+associate :: Prop -> Prop
+associate = undefined
+
+commute :: Prop -> Prop
+commute = \case
+  PProd p q -> PProd q p
+  _ -> undefined
+
+pairwise :: Prop -> Prop -> Prop
+pairwise = undefined
+
+showCom :: Com -> String
+showCom = \case
+  Assign x e -> x ++ " := " ++ show e
+  Assert p -> "assert " ++ show p
+  Seq a b -> showCom a ++ ";\n" ++ showCom b
+  Prod a b -> "(" ++ showCom a ++ "\n*\n" ++ showCom b ++ ")"
+  While e c -> "while " ++ show e ++ " {\n" ++ showCom c ++ "\n}"
+  If e c0 c1 -> "if " ++ show e ++ "{\n" ++ showCom c0 ++ "\n} else {\n" ++ showCom c1 ++ "\n}"
+  Skip -> "skip"

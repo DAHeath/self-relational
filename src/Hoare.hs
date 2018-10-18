@@ -118,7 +118,7 @@ hoare' c q =
            , clause (PAnd p (PNot cond)) q
            ]
       pure p
-    Assert cond -> pure cond
+    Assert cond -> pure (PNot cond)
 
 hoare :: Com -> [Prop]
 hoare c = case runWriter (evalStateT (hoare' c PTrue) 0) of
