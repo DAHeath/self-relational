@@ -6,3 +6,4 @@ eql.cabal
 *.pdf
 *.aux
 *.glob
+*.vo

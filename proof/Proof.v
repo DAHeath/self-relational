@@ -144,42 +144,11 @@ Proof.
   inversion H; subst; auto.
 Qed.
 
-Lemma while_unfold : forall n e c st st',
-  ceval (cwhile (S n) e c) (singleton st) (singleton st') <->
-  (ceval (cseq (cif e c cskip) (cwhile n e c)) (singleton st) (singleton st') /\ beval st e = true)
-.
-Proof.
-  split; intros.
-  - inversion H; subst.
-    split.
-    econstructor; try eassumption.
-    apply EIfTrue; eassumption.
-    assumption.
-  - inversion H; subst.
-    inversion H0; subst.
-    inversion H4; subst.
-    inversion H7; subst.
-    eapply EWhileTrue; eassumption.
-    eapply EWhileTrue; eassumption.
-    congruence.
-Qed.
-
-
-Theorem while : forall P c0 n e,
+(* TODO *)
+Axiom while : forall P c0 n e,
   ({{P}} cwhile n e c0 {{P}} ->
    {{P}} cseq (cif e c0 cskip) (cwhile n e c0) {{P}}) ->
   {{P}} cwhile (S n) e c0 {{P}}.
-Proof.
-  induction n; unfold triple in *; intros.
-  - eapply H; intros.
-    + inversion H2; subst; assumption.
-    + econstructor.
-      eapply while_unfold in H0.
-      inversion H0; subst.
-      apply EIfTrue.
-      eapply H5.
-
-
 
 Theorem consequence : forall P P' Q Q' c,
   assert_implies P P' ->
