@@ -165,7 +165,7 @@ Proof.
     eapply IHkeval2; auto.
 Qed.
 
-Lemma keval_ceval : forall st st' c,
+Lemma ceval_keval : forall st st' c,
   ceval c st st' -> exists k, keval k c st st'.
 Proof.
   induction 1.
@@ -206,7 +206,13 @@ Proof.
     eapply keval_up in H2; eauto.
 Qed.
 
-
+Lemma keval_ceval : forall k st st' c,
+  keval k c st st' -> ceval c st st'.
+Proof.
+  induction 1; auto.
+  - eapply EWhileTrue; eauto.
+  - econstructor; eauto.
+Qed.
 
 Definition Assertion := state -> Prop.
 Definition assert_implies (P Q : Assertion) : Prop :=
@@ -332,23 +338,6 @@ Definition first (P:Assertion) (f:state -> Prop) : Assertion :=
   | _ => False
   end.
 
-(* Theorem while' : forall P e c0 c1, *)
-(*   (1* {{P}} cprod cskip c1 {{P}} -> *1) *)
-(*   {{first P (fun st => bassn e st)}} cprod c0 c1 {{P}} -> *)
-(*   {{P}} cprod (cwhile e c0) c1 {{first P (fun st => ~(bassn e st))}}. *)
-(* Proof. *)
-(*   unfold triple. *)
-(*   intros. *)
-(*   inversion H0; subst. *)
-(*   remember (cwhile e c0) as Hc. *)
-(*   induction H0; try inversion HeqHc; simpl in *; subst. *)
-(*   - simpl. *)
-(*   - split. *)
-(*     eapply H. *)
-(*     inversion H0; subst. *)
-(*     inversion H6; subst. *)
-    
-
 Theorem seq : forall (P Q R : Assertion) c0 c1 c2,
   partition c1 c2 c0 ->
   {{P}} c1 {{Q}} ->
@@ -358,6 +347,18 @@ Proof.
   intros.
   eapply part; eauto.
   eapply split; simpl; eauto.
+Qed.
+
+Theorem sequence : forall (P Q R : Assertion) c0 c1,
+  {{P}} c0 {{Q}} ->
+  {{Q}} c1 {{R}} ->
+  {{P}} cseq c0 c1 {{R}}.
+Proof.
+  unfold triple.
+  intros.
+  inversion H1; subst.
+  eapply H0; eauto.
+  eapply H; eauto.
 Qed.
 
 Theorem kseq : forall k (P Q R : Assertion) c0 c1,
@@ -371,8 +372,6 @@ Proof.
   eapply H0; eauto.
   eapply H; eauto.
 Qed.
-
-Definition pre := pred.
 
 Theorem ktriple_up : forall k k' P Q c,
   k <= k' ->
@@ -389,9 +388,9 @@ Proof.
 Qed.
 
 Theorem kwhile : forall k P c0 e,
-  (pre k |- {{fun st => P st /\ bassn e st}}c0{{P}}) ->
-  ((pre k |- {{P}} cwhile e c0 {{fun st => P st /\ ~(bassn e st)}}) ->
-   (pre k |- {{P}} cseq (cif e c0 cskip) (cwhile e c0) {{fun st => P st /\ ~(bassn e st)}})) ->
+  (pred k |- {{fun st => P st /\ bassn e st}}c0{{P}}) ->
+  ((pred k |- {{P}} cwhile e c0 {{fun st => P st /\ ~(bassn e st)}}) ->
+   (pred k |- {{P}} cseq (cif e c0 cskip) (cwhile e c0) {{fun st => P st /\ ~(bassn e st)}})) ->
   (k |- {{P}} cwhile e c0 {{fun st => P st /\ ~(bassn e st)}}).
 Proof.
   intros.
@@ -403,12 +402,10 @@ Proof.
     inversion H1; clear H1; subst.
     + (* True *)
       eapply H0.
-      eapply IHk.
+      eapply IHk; intros.
       eapply ktriple_up in H.
       apply H.
-      unfold pre.
       omega.
-      intros.
       apply kseq with P.
       unfold ktriple; intros.
       inversion H3; subst.
@@ -416,7 +413,6 @@ Proof.
       eapply H.
       eapply keval_up in H15.
       apply H15.
-      unfold pre.
       omega.
       split; auto.
       inversion H15; subst.
@@ -430,11 +426,47 @@ Proof.
       split. auto. unfold bassn. congruence.
 Qed.
 
-(* TODO *)
-Axiom while : forall P c0 n e,
-  ({{P}} cwhile e c0 {{fun st => P st /\ ~(bassn e st)}} ->
-   {{P}} cseq (cif e c0 cskip) (cwhile e c0) {{fun st => P st /\ ~(bassn e st)}}) ->
-  {{P}} cwhile e c0 {{fun st => P st /\ ~(bassn e st)}}.
+Lemma triple_ktriple : forall P c Q,
+  {{P}} c {{Q}} <-> forall k, k |- {{P}} c {{Q}}.
+Proof.
+  unfold triple, ktriple; split; intros.
+  - eapply H.
+    eapply keval_ceval.
+    eauto.
+    eauto.
+  - eapply ceval_keval in H0.
+    inversion H0.
+    eapply H.
+    eapply H2.
+    auto.
+Qed.
+
+Theorem while : forall P c0 e,
+  ({{fun st => P st /\ bassn e st}}c0{{P}}) ->
+  (({{P}} cwhile e c0 {{fun st => P st /\ ~(bassn e st)}}) ->
+   ({{P}} cseq (cif e c0 cskip) (cwhile e c0) {{fun st => P st /\ ~(bassn e st)}})) ->
+  ({{P}} cwhile e c0 {{fun st => P st /\ ~(bassn e st)}}).
+Proof.
+  intros.
+  apply triple_ktriple.
+  rewrite triple_ktriple in H.
+  rewrite triple_ktriple in H0.
+  rewrite triple_ktriple in H0.
+  intros.
+  apply kwhile.
+  apply H.
+  intros.
+  eapply kseq.
+  unfold ktriple; intros.
+  inversion H2; subst.
+  unfold ktriple in H.
+  eapply H.
+  apply H11.
+  unfold bassn; eauto.
+  inversion H11; subst.
+  auto.
+  apply H1.
+Qed.
 
 Theorem consequence : forall P P' Q Q' c,
   assert_implies P P' ->
