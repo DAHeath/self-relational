@@ -116,104 +116,6 @@ Inductive ceval : com -> state -> state -> Prop :=
     ceval c2 st2 st2' ->
     ceval (cprod c1 c2) (composite st1 st2) (composite st1' st2').
 Hint Constructors ceval.
-
-(* Evaluation relation where while depth is restricted to k iterations. *)
-Inductive keval : nat -> com -> state -> state -> Prop :=
-| KSkip : forall k st, keval k cskip st st
-| KAssign : forall k st x e n,
-    aeval st e = n ->
-    keval k (x ::= e) (singleton st) (singleton (stupdate x n st))
-| KIfTrue : forall k st st' e c1 c2,
-    beval st e = true ->
-    keval k c1 (singleton st) (singleton st') ->
-    keval k (cif e c1 c2) (singleton st) (singleton st')
-| KIfFalse : forall k st st' e c1 c2,
-    beval st e = false ->
-    keval k c2 (singleton st) (singleton st') ->
-    keval k (cif e c1 c2) (singleton st) (singleton st')
-| KWhileTrue : forall k st st' st'' e c,
-    beval st e = true ->
-    keval k c (singleton st) (singleton st') ->
-    keval k (cwhile e c) (singleton st') (singleton st'') ->
-    keval (S k) (cwhile e c) (singleton st) (singleton st'')
-| KWhileFalse : forall k st e c,
-    beval st e = false ->
-    keval k (cwhile e c) (singleton st) (singleton st)
-| KSeq : forall k st st' st'' c1 c2,
-    keval k c1 st st' ->
-    keval k c2 st' st'' ->
-    keval k (cseq c1 c2) st st''
-| KProd : forall k st1 st1' st2 st2' c1 c2,
-    keval k c1 st1 st1' ->
-    keval k c2 st2 st2' ->
-    keval k (cprod c1 c2) (composite st1 st2) (composite st1' st2').
-Hint Constructors keval.
-
-Lemma keval_up : forall st st' c k k',
-  k <= k' -> keval k c st st' -> keval k' c st st'.
-Proof.
-  intros.
-  generalize dependent k'.
-  induction H0; auto; intros.
-  - destruct k'.
-    inversion H0.
-    eapply KWhileTrue; eauto.
-    eapply IHkeval1; omega.
-    eapply IHkeval2; omega.
-  - eapply KSeq.
-    eapply IHkeval1; auto.
-    eapply IHkeval2; auto.
-Qed.
-
-Lemma ceval_keval : forall st st' c,
-  ceval c st st' -> exists k, keval k c st st'.
-Proof.
-  induction 1.
-  - exists 0. auto.
-  - exists 0. auto.
-  - inversion IHceval; subst.
-    exists x.
-    eapply KIfTrue; auto.
-  - inversion IHceval; subst.
-    exists x.
-    eapply KIfFalse; auto.
-  - inversion IHceval1; subst.
-    inversion IHceval2; subst.
-    exists (S (max x x0)).
-    eapply KWhileTrue; eauto.
-    assert (x <= max x x0). apply le_max_l.
-    eapply keval_up in H2.
-    eapply H2.
-    auto.
-    assert (x0 <= max x x0). apply le_max_r.
-    eapply keval_up in H3.
-    eapply H3.
-    auto.
-  - exists 0. auto.
-  - inversion IHceval1; subst.
-    inversion IHceval2; subst.
-    exists (max x x0).
-    assert (x <= max x x0). apply le_max_l.
-    assert (x0 <= max x x0). apply le_max_r.
-    eapply keval_up in H1; eauto.
-    eapply keval_up in H2; eauto.
-  - inversion IHceval1; subst.
-    inversion IHceval2; subst.
-    exists (max x x0).
-    assert (x <= max x x0). apply le_max_l.
-    assert (x0 <= max x x0). apply le_max_r.
-    eapply keval_up in H1; eauto.
-    eapply keval_up in H2; eauto.
-Qed.
-
-Lemma keval_ceval : forall k st st' c,
-  keval k c st st' -> ceval c st st'.
-Proof.
-  induction 1; auto.
-  - eapply EWhileTrue; eauto.
-  - econstructor; eauto.
-Qed.
-
 Definition Assertion := state -> Prop.
 Definition assert_implies (P Q : Assertion) : Prop :=
   forall st, P st -> Q st.
@@ -228,11 +130,6 @@ Definition triple (P:Assertion) (c:com) (Q:Assertion) : Prop :=
   forall st st', ceval c st st' -> P st -> Q st'.
 
 Notation "{{ P }} c {{ Q }}" := (triple P c Q) (at level 90, c at next level).
-
-Definition ktriple (k:nat) (P:Assertion) (c:com) (Q:Assertion) : Prop :=
-  forall st st', keval k c st st' -> P st -> Q st'.
-
-Notation "k |- {{ P }} c {{ Q }}" := (ktriple k P c Q) (at level 90, c at next level).
 
 Definition bassn b : Assertion :=
   fun st => match st with
@@ -349,16 +246,186 @@ Proof.
   eapply split; simpl; eauto.
 Qed.
 
-Theorem sequence : forall (P Q R : Assertion) c0 c1,
-  {{P}} c0 {{Q}} ->
-  {{Q}} c1 {{R}} ->
-  {{P}} cseq c0 c1 {{R}}.
+Theorem consequence : forall P P' Q Q' c,
+  assert_implies P P' ->
+  assert_implies Q' Q ->
+  {{P'}} c {{Q'}} ->
+  {{P}} c {{Q}}.
+Proof. unfold triple, assert_implies; eauto. Qed.
+
+Theorem assign : forall P x e,
+  {{ assn_sub x e P }} cassign x e {{P}}.
 Proof.
-  unfold triple.
-  intros.
+  unfold triple; intros; inversion H; subst; auto.
+Qed.
+
+Theorem hoare_if : forall P Q e c0 c1 c2,
+  {{first P (fun st => bassn e st)}} cprod c0 c2 {{Q}} ->
+  {{first P (fun st => ~(bassn e st))}} cprod c1 c2 {{Q}} ->
+  {{P}} cprod (cif e c0 c1) c2 {{Q}}.
+Proof.
+  unfold triple; intros.
   inversion H1; subst.
-  eapply H0; eauto.
-  eapply H; eauto.
+  inversion H5; subst.
+  - eapply H. constructor; eauto. simpl; eauto.
+  - eapply H0. constructor; eauto. simpl. split; eauto. congruence.
+Qed.
+
+Definition commute (P:Assertion) : Assertion :=
+  fun st => match st with
+            | singleton st => False
+            | composite st0 st1 => P (composite st1 st0)
+            end.
+
+Theorem comm : forall P Q c0 c1,
+  {{ commute P }} cprod c1 c0 {{ commute Q }} ->
+  {{ P }} cprod c0 c1 {{ Q }}.
+Proof.
+  unfold triple. intros.
+  inversion H0; subst.
+  assert (ceval (cprod c1 c0) (composite st2 st1) (composite st2' st1')).
+  - constructor; auto.
+  - apply (H (composite st2 st1) (composite st2' st1') H2).
+    unfold commute.
+    auto.
+Qed.
+
+Definition associate (P:Assertion) : Assertion :=
+  fun st => match st with
+  | composite (composite st0 st1) st2 => P (composite st0 (composite st1 st2))
+  | _ => False
+  end.
+
+Theorem assoc : forall P Q c0 c1 c2,
+  {{ associate P }} cprod (cprod c0 c1) c2 {{ associate Q }} ->
+  {{ P }} cprod c0 (cprod c1 c2) {{ Q }}.
+Proof.
+  unfold triple. intros.
+  inversion H0; subst.
+  inversion H7; subst.
+  assert (ceval (cprod (cprod c0 c1) c2)
+            (composite (composite st1 st0) st3)
+            (composite (composite st1' st1'0) st2'0)).
+  - constructor; auto.
+  - apply (H (composite (composite st1 st0) st3)
+             (composite (composite st1' st1'0) st2'0) H2).
+    unfold associate.
+    assumption.
+Qed.
+
+Theorem split : forall (P Q P0 P1 Q0 Q1 : Assertion) c0 c1,
+  (forall st0 st1, P (composite st0 st1) -> (P0 st0 /\ P1 st1)) ->
+  (forall st0 st1, (Q0 st0 /\ Q1 st1) -> Q (composite st0 st1)) ->
+  {{P0}} c0 {{Q0}} ->
+  {{P1}} c1 {{Q1}} ->
+  {{P}} cprod c0 c1 {{Q}}.
+Proof.
+  unfold triple; intros.
+  inversion H3; subst.
+  apply H0.
+  split; repeat (try (eapply H2); try (eapply H1); try (eapply H); eauto).
+Qed.
+
+(* Evaluation relation where while depth is restricted to k iterations. *)
+Inductive keval : nat -> com -> state -> state -> Prop :=
+| KSkip : forall k st, keval k cskip st st
+| KAssign : forall k st x e n,
+    aeval st e = n ->
+    keval k (x ::= e) (singleton st) (singleton (stupdate x n st))
+| KIfTrue : forall k st st' e c1 c2,
+    beval st e = true ->
+    keval k c1 (singleton st) (singleton st') ->
+    keval k (cif e c1 c2) (singleton st) (singleton st')
+| KIfFalse : forall k st st' e c1 c2,
+    beval st e = false ->
+    keval k c2 (singleton st) (singleton st') ->
+    keval k (cif e c1 c2) (singleton st) (singleton st')
+| KWhileTrue : forall k st st' st'' e c,
+    beval st e = true ->
+    keval k c (singleton st) (singleton st') ->
+    keval k (cwhile e c) (singleton st') (singleton st'') ->
+    keval (S k) (cwhile e c) (singleton st) (singleton st'')
+| KWhileFalse : forall k st e c,
+    beval st e = false ->
+    keval k (cwhile e c) (singleton st) (singleton st)
+| KSeq : forall k st st' st'' c1 c2,
+    keval k c1 st st' ->
+    keval k c2 st' st'' ->
+    keval k (cseq c1 c2) st st''
+| KProd : forall k st1 st1' st2 st2' c1 c2,
+    keval k c1 st1 st1' ->
+    keval k c2 st2 st2' ->
+    keval k (cprod c1 c2) (composite st1 st2) (composite st1' st2').
+Hint Constructors keval.
+
+Definition ktriple (k:nat) (P:Assertion) (c:com) (Q:Assertion) : Prop :=
+  forall st st', keval k c st st' -> P st -> Q st'.
+
+Notation "k |- {{ P }} c {{ Q }}" := (ktriple k P c Q) (at level 90, c at next level).
+
+Lemma keval_up : forall st st' c k k',
+  k <= k' -> keval k c st st' -> keval k' c st st'.
+Proof.
+  intros.
+  generalize dependent k'.
+  induction H0; auto; intros.
+  - destruct k'.
+    inversion H0.
+    eapply KWhileTrue; eauto.
+    eapply IHkeval1; omega.
+    eapply IHkeval2; omega.
+  - eapply KSeq.
+    eapply IHkeval1; auto.
+    eapply IHkeval2; auto.
+Qed.
+
+Lemma ceval_keval : forall st st' c,
+  ceval c st st' -> exists k, keval k c st st'.
+Proof.
+  induction 1.
+  - exists 0. auto.
+  - exists 0. auto.
+  - inversion IHceval; subst.
+    exists x.
+    eapply KIfTrue; auto.
+  - inversion IHceval; subst.
+    exists x.
+    eapply KIfFalse; auto.
+  - inversion IHceval1; subst.
+    inversion IHceval2; subst.
+    exists (S (max x x0)).
+    eapply KWhileTrue; eauto.
+    assert (x <= max x x0). apply le_max_l.
+    eapply keval_up in H2.
+    eapply H2.
+    auto.
+    assert (x0 <= max x x0). apply le_max_r.
+    eapply keval_up in H3.
+    eapply H3.
+    auto.
+  - exists 0. auto.
+  - inversion IHceval1; subst.
+    inversion IHceval2; subst.
+    exists (max x x0).
+    assert (x <= max x x0). apply le_max_l.
+    assert (x0 <= max x x0). apply le_max_r.
+    eapply keval_up in H1; eauto.
+    eapply keval_up in H2; eauto.
+  - inversion IHceval1; subst.
+    inversion IHceval2; subst.
+    exists (max x x0).
+    assert (x <= max x x0). apply le_max_l.
+    assert (x0 <= max x x0). apply le_max_r.
+    eapply keval_up in H1; eauto.
+    eapply keval_up in H2; eauto.
+Qed.
+
+Lemma keval_ceval : forall k st st' c,
+  keval k c st st' -> ceval c st st'.
+Proof.
+  induction 1; auto.
+  - eapply EWhileTrue; eauto.
+  - econstructor; eauto.
 Qed.
 
 Theorem kseq : forall k (P Q R : Assertion) c0 c1,
@@ -468,82 +535,48 @@ Proof.
   apply H1.
 Qed.
 
-Theorem consequence : forall P P' Q Q' c,
-  assert_implies P P' ->
-  assert_implies Q' Q ->
-  {{P'}} c {{Q'}} ->
-  {{P}} c {{Q}}.
-Proof. unfold triple, assert_implies; eauto. Qed.
-
-Theorem assign : forall P x e,
-  {{ assn_sub x e P }} cassign x e {{P}}.
+Theorem kwhile' : forall k P c0 c1 c1' c1'' e,
+  partition c1' c1'' c1 ->
+  (pred k |- {{P}} cprod (cif e c0 cskip) c1' {{P}}) ->
+  ((pred k |- {{P}} cprod (cwhile e c0) c1'' {{first P (fun st => ~(bassn e st))}}) ->
+   (pred k |- {{P}} cseq (cprod (cif e c0 cskip) c1') (cprod (cwhile e c0) c1'') {{first P (fun st => ~(bassn e st))}})) ->
+  (k |- {{P}} cprod (cwhile e c0) c1 {{first P (fun st => ~(bassn e st))}}).
 Proof.
-  unfold triple; intros; inversion H; subst; auto.
+  intros.
+  induction k.
+  - unfold ktriple. intros.
+    inversion H2; subst. inversion H7; subst. unfold bassn. simpl. split.
+    eapply H0. econstructor.
+    eapply KIfFalse; eauto.
+    eauto.
+    eauto.
+    congruence.
+  - simpl in *.
+    unfold ktriple. intros.
+    inversion H1; clear H1; subst.
+    + (* True *)
+      eapply H0.
+      eapply IHk; intros.
+      eapply ktriple_up in H.
+      apply H.
+      omega.
+      apply kseq with P.
+      unfold ktriple; intros.
+      inversion H3; subst.
+      unfold ktriple in H.
+      eapply H.
+      eapply keval_up in H15.
+      apply H15.
+      omega.
+      split; auto.
+      inversion H15; subst.
+      auto.
+      auto.
+      econstructor.
+      eapply KIfTrue; eauto.
+      eauto.
+      eauto.
+    + (* False *)
+      split. auto. unfold bassn. congruence.
 Qed.
 
-Theorem hoare_if : forall P Q e c0 c1 c2,
-  {{first P (fun st => bassn e st)}} cprod c0 c2 {{Q}} ->
-  {{first P (fun st => ~(bassn e st))}} cprod c1 c2 {{Q}} ->
-  {{P}} cprod (cif e c0 c1) c2 {{Q}}.
-Proof.
-  unfold triple; intros.
-  inversion H1; subst.
-  inversion H5; subst.
-  - eapply H. constructor; eauto. simpl; eauto.
-  - eapply H0. constructor; eauto. simpl. split; eauto. congruence.
-Qed.
-
-Definition commute (P:Assertion) : Assertion :=
-  fun st => match st with
-            | singleton st => False
-            | composite st0 st1 => P (composite st1 st0)
-            end.
-
-Theorem comm : forall P Q c0 c1,
-  {{ commute P }} cprod c1 c0 {{ commute Q }} ->
-  {{ P }} cprod c0 c1 {{ Q }}.
-Proof.
-  unfold triple. intros.
-  inversion H0; subst.
-  assert (ceval (cprod c1 c0) (composite st2 st1) (composite st2' st1')).
-  - constructor; auto.
-  - apply (H (composite st2 st1) (composite st2' st1') H2).
-    unfold commute.
-    auto.
-Qed.
-
-Definition associate (P:Assertion) : Assertion :=
-  fun st => match st with
-  | composite (composite st0 st1) st2 => P (composite st0 (composite st1 st2))
-  | _ => False
-  end.
-
-Theorem assoc : forall P Q c0 c1 c2,
-  {{ associate P }} cprod (cprod c0 c1) c2 {{ associate Q }} ->
-  {{ P }} cprod c0 (cprod c1 c2) {{ Q }}.
-Proof.
-  unfold triple. intros.
-  inversion H0; subst.
-  inversion H7; subst.
-  assert (ceval (cprod (cprod c0 c1) c2)
-            (composite (composite st1 st0) st3)
-            (composite (composite st1' st1'0) st2'0)).
-  - constructor; auto.
-  - apply (H (composite (composite st1 st0) st3)
-             (composite (composite st1' st1'0) st2'0) H2).
-    unfold associate.
-    assumption.
-Qed.
-
-Theorem split : forall (P Q P0 P1 Q0 Q1 : Assertion) c0 c1,
-  (forall st0 st1, P (composite st0 st1) -> (P0 st0 /\ P1 st1)) ->
-  (forall st0 st1, (Q0 st0 /\ Q1 st1) -> Q (composite st0 st1)) ->
-  {{P0}} c0 {{Q0}} ->
-  {{P1}} c1 {{Q1}} ->
-  {{P}} cprod c0 c1 {{Q}}.
-Proof.
-  unfold triple; intros.
-  inversion H3; subst.
-  apply H0.
-  split; repeat (try (eapply H2); try (eapply H1); try (eapply H); eauto).
-Qed.
