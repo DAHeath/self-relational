@@ -389,8 +389,6 @@ associateL, associateR :: Prop -> Prop
 associateL = undefined
 associateR = undefined
 
-
-
 commute :: Prop -> Prop
 commute = \case
   PProd p q -> PProd q p
