@@ -248,7 +248,6 @@ Proof.
     eapply hoare_seq.
     + admit.
     + apply IHn.
-    ther-
     + unfold triple in *; intros.
       eapply H; intros.
       eapply IHn; intros.
@@ -285,68 +284,6 @@ Proof.
   inversion H5; subst.
   - eapply H. constructor; eauto. simpl; eauto.
   - eapply H0. constructor; eauto. simpl. split; eauto. congruence.
-Qed.
-
-Inductive partition : com -> com -> com -> Prop :=
-| PartL : forall c0 c0' c0'' c1,
-    partition c0' c0'' c0 ->
-    partition c0' (cseq c0'' c1) (cseq c0 c1)
-| PartR : forall c0 c1 c1' c1'',
-    partition c1' c1'' c1 ->
-    partition (cseq c0 c1') c1'' (cseq c0 c1)
-| PSeq : forall c0 c1,
-    partition c0 c1 (cseq c0 c1)
-| PSkipL : forall c, partition cskip c c
-| PSkipR : forall c, partition c cskip c
-| PProd : forall c0 c1 c0' c0'' c1' c1'',
-    partition c0' c0'' c0 ->
-    partition c1' c1'' c1 ->
-    partition (cprod c0' c1') (cprod c0'' c1'') (cprod c0 c1).
-
-Lemma seqassoc : forall c0 c0' c0'' st st',
-  ceval (cseq c0 (cseq c0' c0'')) st st' <->
-  ceval (cseq (cseq c0 c0') c0'') st st'.
-Proof.
-  split; intros; inversion H; subst.
-  - inversion H5; subst.
-    eapply ESeq. eapply ESeq. apply H2. apply H3. assumption.
-  - inversion H2; subst.
-    eapply ESeq. apply H3. eapply ESeq. apply H7. assumption.
-Qed.
-
-Lemma partdeterm : forall c1 c2 c0 st st',
-  partition c1 c2 c0 ->
-  ceval c0 st st' <-> ceval (cseq c1 c2) st st'.
-Proof.
-  intros.
-  generalize dependent st.
-  generalize dependent st'.
-  induction H; subst; intros; try (rewrite seqassoc).
-  - split; intros H0; inversion H0; subst
-    ; econstructor; try (apply IHpartition); eauto.
-  - split; intros H0; inversion H0; subst.
-    + rewrite <- seqassoc. econstructor; try (apply IHpartition); eauto.
-    + inversion H3; repeat (try econstructor; eauto; try (apply IHpartition)).
-  - reflexivity.
-  - split; intros.
-    + eauto.
-    + inversion H; inversion H2; auto.
-  - split; intros.
-    + eapply ESeq. apply H. apply ESkip.
-    + inversion H; subst. inversion H5; subst. assumption.
-  - split; intros.
-    + inversion H1; subst.
-      apply IHpartition1 in H4.
-      apply IHpartition2 in H7.
-      inversion H4; subst.
-      inversion H7; subst.
-      econstructor; eauto.
-    + inversion H1; subst.
-      inversion H4; subst.
-      inversion H7; subst.
-      constructor.
-      apply IHpartition1; eauto.
-      apply IHpartition2; eauto.
 Qed.
 
 Definition pairwise (P:Assertion) (Q:Assertion) : Assertion :=

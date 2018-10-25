@@ -1,0 +1,198 @@
+\documentclass[p.tex]{subfiles}
+\begin{document}
+\section{Technical Approach}\label{sec:approach}
+\subsection{Products of Commands}\label{sec:product-com}
+In order to expand the expressive power of our proof system, we extend
+$\com$ with an additional construction: Product commands.
+\[ \com ::= \cdots~|~\cprod{\com}{\com} \]
+Informally,
+a product command represents two commands whose executions act on
+different program states. However, by considering them together we can
+establish relationships between different programs or even different
+parts of the same program.
+
+To give semantic meaning to this new construction, we extend our
+definition of state:
+\[\state ::= \var \rightarrow \mathbb{Z}~|~\sprod{\state}{\state}\]
+As in \cref{sec:language}, a state contains mappings from variables to integer
+values. However, this new definition extends allows multiple
+`parallel' states which we can consider simultaneously. The semantics
+defined previously remain identical, but the originally defined
+commands only make progress when the state is a singleton map. The new
+parallel construction allows us to define sensible formal semantics for
+product commands:
+\begin{align*}
+  \inference[E-Product]{%
+    \ceval{c_0}{\sigma_0}{\sigma_2}&
+    \ceval{c_1}{\sigma_1}{\sigma_3}
+  }{%
+    \ceval{\cprod{c_0}{c_1}}{\sprod{\sigma_0}{\sigma_1}}{\sprod{\sigma_2}{\sigma_3}}
+  }
+\end{align*}
+That is, two parallel commands executed over two parallel states
+execute independently.
+
+TODO
+
+\subsection{Partitioning Commands}\label{sec:partition}
+\begin{figure}
+\begin{spreadlines}{5pt}
+\begin{gather*}
+  \inference[\textsc{P-SequenceLeft}]{%
+    \relpart{c_0'}{c_0''}{c_0}
+  }{%
+    \relpart{c_0'}{(\cseq{c_0''}{c_1})}{(\cseq{c_0}{c_1})}
+  }
+  \qquad
+  \inference[\textsc{P-SequenceRight}]{%
+    \relpart{c_1'}{c_1''}{c_1}
+  }{%
+    \relpart{(\cseq{c_0}{c_1'})}{c_1''}{(\cseq{c_0}{c_1})}
+  }
+  \\
+  \inference[\textsc{P-Sequence}]{%
+  }{%
+    \relpart{c_0}{c_1}{(\cseq{c_0}{c_1})}
+  }
+  \\
+  \inference[\textsc{P-SkipLeft}]{%
+  }{%
+    \relpart{\cskip}{c}{c}
+  }
+  \qquad
+  \inference[\textsc{P-SkipRight}]{%
+  }{%
+    \relpart{c}{\cskip}{c}
+  }
+  \\
+  \inference[\textsc{P-Product}]{%
+    \relpart{c_0'}{c_0''}{c_0}&
+    \relpart{c_1'}{c_1''}{c_1}
+  }{%
+    \relpart{(\cprod{c_0'}{c_1'})}{(\cprod{c_0''}{c_1''})}{(\cprod{c_0}{c_1})}
+  }
+\end{gather*}
+\end{spreadlines}
+\caption{%
+  Natural deductions that define the partition relation,
+  $\textsf{part}$. Metavariables $c_0, c_1, \ldots$ range over the
+  space of commands, $\com$.
+}\label{fig:partition}
+\end{figure}
+
+In order to cut our programs into pieces so that we can reason about
+multiple pieces simultaneously, we need a formal notion of what
+cutting a program means. Informally, we can think of an arbitrary
+command as composed of some vector of subcommands sequenced
+together. We would like to be able to choose an arbitrary position
+in this vector, \emph{partition} the vector at this point, and then
+reason about the two partitions together.
+%
+We construct a relation, $\textsf{part}$, which formalizes this
+intuition. When two commands $c_0$ and $c_1$ form a partition of
+another command $c_2$, we write $\relpart{c_0}{c_1}{c_2}$.
+\Cref{fig:partition} defines this relation.
+
+The partition relation is useful because the partitions of a command
+preserve the semantic meaning of the original command:
+\begin{theorem}
+  Let $c_0, c_1, c_2 \in \com$ be commands such that
+  $\relpart{c_0}{c_1}{c_2}$ and let $\sigma_0, \sigma_1 \in
+  \state$ be program states. Then the semantic meaning of $c_2$ is
+  the same as the semantic meaning of $c_0$ sequenced with $c_1$:
+  \[
+  \ceval{c_2}{\sigma_0}{\sigma_1}
+  \iff
+  \ceval{\cseq{c_0}{c_1}}{\sigma_0}{\sigma_1}
+  \]
+\end{theorem}
+\begin{proof}
+  By induction on the construction of the partition, using
+  the fact that command sequencing is associative with respect
+  to the semantics. Details formalized in Coq.
+\end{proof}
+
+Using the partition relation, we can generalize the Hoare Logic rule
+for sequences of commands:
+\begin{align*}
+  \inference[$\textsc{Part}_0$]{%
+    \hoare{P}{c_1}{Q}&
+    \hoare{Q}{c_2}{R}&
+    \relpart{c_1}{c_2}{c_0}
+  }{%
+    \hoare{P}{c_0}{R}
+  }
+\end{align*}
+While this rule is a generalization of the classic Hoare logic
+sequence rule in the sense that we can reclaim the traditional rule
+from this one (but not vice versa), it does not allow us to prove
+anything new. In the next section we will combine partitioning with
+product commands to yield a more expressive proof rule (and
+an accompanying set of other rules).
+
+\subsection{A Self-Relational Proof System}
+\begin{figure}
+\begin{spreadlines}{5pt}
+\begin{gather*}
+  \inference[If]{%
+    \judgement{\Gamma}{P \land b}{c_0 \times c_2}{Q}&
+    \judgement{\Gamma}{P \land \neg b}{c_1 \times c_2}{Q}&
+  }{%
+    \judgement{\Gamma}{P}{\cprod{\cif{b}{c_0}{c_1}}{c_2}}{Q}
+  }
+  \\
+  \inference[$\textsc{While}$]{%
+    \judgement{%
+      \Gamma \cup \hoare{P}{\cwhile{b}{c_0} \times c_1}{Q \land \neg e}
+    }{P}{\cif{b}{c_0}{\cskip}~;~\cwhile{b}{c_0} \times c_1}{Q}
+  }{%
+    \judgement{\Gamma}{P}{\cwhile{b}{c_0} \times c_1}{Q \land \neg e}
+  }
+  \\
+  \inference[\textsc{Split}]{%
+    \judgement{\Gamma}{P_0}{c_0}{Q_0}&
+    \forall \sigma_0, \sigma_1.~P(\sigma_0 \otimes \sigma_1) \Rightarrow
+      P_0(\sigma_0) \land P_1(\sigma_1)\\
+    \judgement{\Gamma}{P_1}{c_1}{Q_1}&
+    \forall \sigma_0, \sigma_1.~Q(\sigma_0 \otimes \sigma_1) \Leftarrow
+      Q_0(\sigma_0) \land Q_1(\sigma_1)\\
+  }{%
+    \judgement{\Gamma}{P}{c_0 \times c_1}{Q}
+  }
+  \\
+  \inference[\textsc{Comm}]{%
+    \judgement{\Gamma}{\commute~P}{c_1 \times c_0}{\commute~Q}
+  }{%
+    \judgement{\Gamma}{P}{c_0 \times c_1}{Q}
+  }
+  \qquad
+  \inference[\textsc{Assoc}]{%
+    \judgement{\Gamma}{\associate~P}{(c_0 \times c_1) \times c_2}{\associate~Q}
+  }{%
+    \judgement{\Gamma}{P}{c_0 \times (c_1 \times c_2)}{Q}
+  }
+  \\
+  \commute(P) := \lambda(\sigma_0 \otimes \sigma_1).~P(\sigma_1 \otimes \sigma_0)\\
+  \associate(P) := \lambda((\sigma_0 \otimes \sigma_1) \otimes
+  \sigma_2)).~P(\sigma_0 \otimes (\sigma_1 \otimes \sigma_2))
+\end{gather*}
+\end{spreadlines}
+\caption{}\label{fig:proof-system}
+\end{figure}
+
+The key idea is to construct a Hoare-style proof rule for
+partitioning, but that allows us to consider the two partitions
+together as a product:
+\begin{gather*}
+  \inference[$\textsc{Part}$]{%
+    \relpart{c_0}{c_1}{c_2}&
+    \judgement{\Gamma}{P}{c_1}{R}&
+    \judgement{\Gamma}{\pairwise(P,R)}{c_1 \times c_2}{\pairwise(R,Q)}
+  }{%
+    \judgement{\Gamma}{P}{c_0}{R}
+  }
+  \\
+  \textsf{pairwise}(P, Q) := \lambda(\sprod{\sigma_0}{\sigma_1}).~P(\sigma_0) \land Q(\sigma_1)
+\end{gather*}
+
+\end{document}

@@ -1,4 +1,5 @@
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE TupleSections #-}
 {-# LANGUAGE FlexibleContexts #-}
 module CHoare where
 
@@ -115,10 +116,10 @@ data Proof
   | WHILE Com Prop Proof
   | ASSOC Proof
   | COMM Proof
-  | PARTITION Prop Com Com Proof Proof
+  | PARTITION Prop {- precondition -} Prop {- midcondition -} Com Com Proof {- small proof -} Proof
   | SPLIT Prop {- P0 -} Prop {- Q0 -} Prop {- P1 -} Prop {- Q1 -} Proof Proof
   | FAIL -- The proof that is trivially invalid.
-  | CHOICE [Proof] -- The proof which is valid if any of its arguments are valid.
+  | CHOICE Prop {- precondition -} [Proof] -- The proof which is valid if any of its arguments are valid.
   | COVER Com Bool {- memoization of implication -} Prop
   deriving (Show, Read, Eq, Ord)
 
@@ -130,10 +131,12 @@ inductive = \case
   WHILE c inv pr0 -> WHILE c inv <$> inductive pr0
   ASSOC pr0 -> ASSOC <$> inductive pr0
   COMM pr0 -> COMM <$> inductive pr0
-  PARTITION r c0 c1 pr0 pr1 -> PARTITION r c0 c1 <$> inductive pr0 <*> inductive pr1
-  SPLIT p0 q0 p1 q1 pr0 pr1 -> SPLIT p0 q0 p1 q1 <$> inductive pr0 <*> inductive pr1
+  PARTITION p r c0 c1 pr0 pr1 ->
+    PARTITION p r c0 c1 <$> inductive pr0 <*> inductive pr1
+  SPLIT p0 q0 p1 q1 pr0 pr1 ->
+    SPLIT p0 q0 p1 q1 <$> inductive pr0 <*> inductive pr1
   FAIL -> Nothing
-  CHOICE prs -> listToMaybe $ mapMaybe inductive prs
+  CHOICE p prs -> listToMaybe $ mapMaybe inductive prs
   COVER c b inv -> if b then Just (COVER c b inv) else Nothing
 
 -- | Calculate a covering in the proof: That is, look at the while loop
@@ -153,10 +156,12 @@ cover' = \case
     pure $ COVER c covered inv
   ASSOC proof' -> ASSOC <$> cover' proof'
   COMM proof' -> COMM <$> cover' proof'
-  PARTITION r c0 c1 proof' proof'' -> PARTITION r c0 c1 <$> cover' proof' <*> cover' proof''
-  SPLIT p0 q0 p1 q1 proof0 proof1 -> SPLIT p0 q0 p1 q1 <$> cover' proof0 <*> cover' proof1
+  PARTITION p r c0 c1 proof' proof'' ->
+    PARTITION p r c0 c1 <$> cover' proof' <*> cover' proof''
+  SPLIT p0 q0 p1 q1 proof0 proof1 ->
+    SPLIT p0 q0 p1 q1 <$> cover' proof0 <*> cover' proof1
   (FAIL) -> pure FAIL
-  CHOICE proofs -> CHOICE <$> mapM cover' proofs
+  CHOICE p proofs -> CHOICE p <$> mapM cover' proofs
   _ -> pure FAIL
 
 -- | Replace each relational predicate in the proof by its definition.
@@ -168,7 +173,10 @@ populate m = \case
   WHILE c p pr0 -> WHILE c (relSubst m p) (go pr0)
   ASSOC pr0 -> ASSOC (go pr0)
   COMM pr0 -> COMM (go pr0)
-  PARTITION p c0 c1 pr0 pr1 -> PARTITION (relSubst m p) c0 c1 (go pr0) (go pr1)
+  PARTITION p r c0 c1 pr0 pr1 ->
+    PARTITION (relSubst m p)
+              (relSubst m r)
+              c0 c1 (go pr0) (go pr1)
   SPLIT p0 q0 p1 q1 pr0 pr1 ->
     SPLIT (relSubst m p0)
           (relSubst m q0)
@@ -177,18 +185,46 @@ populate m = \case
           (go pr0)
           (go pr1)
   FAIL -> FAIL
-  CHOICE prs -> CHOICE (map go prs)
+  CHOICE p prs -> CHOICE (relSubst m p) (map go prs)
   COVER c b p -> COVER c b (relSubst m p)
   where
     go = populate m
 
-replay :: Triple -> Proof -> WriterT [Prop] (State Int) Proof
-replay (Triple p c q) proof =
+replay :: Com -> Proof -> Prop -> WriterT [Prop] (State Int) (Prop, Proof)
+replay c proof q =
   case (c, proof) of
-    (_, FAIL) -> extend (Triple p c q)
-    _ -> undefined
+    (Skip, SKIP) -> pure (q, SKIP)
+    (Assign x e, ASSIGN) -> pure (psubst x e q, ASSIGN)
+    (If cond c0 c1 `Prod` c', IF p pr0 pr1) -> do
+      (q0, pr0') <- replay (c0 `Prod` c') pr0 q
+      (q1, pr1') <- replay (c1 `Prod` c') pr1 q
+      clause (PAnd p cond) q0
+      clause (PAnd p (PNot cond)) q1
+      pure (p, IF p pr0' pr1')
+    (While e c0 `Prod` c', WHILE c p pr0) -> undefined
+    (c0 `Prod` (c1 `Prod` c2), ASSOC pr0) -> do
+      (p, pr0') <- replay ((c0 `Prod` c1) `Prod` c2) pr0 (associateR {- ? -} q)
+      pure (associateL {- ? -} p, ASSOC pr0')
+    (c0 `Prod` c1, COMM pr0) -> do
+      (p, pr0') <- replay (c1 `Prod` c0) pr0 (commute {- ? -} q)
+      pure (commute p, COMM pr0')
+    (_, PARTITION p r c0 c1 pr0 pr1) -> do
+      (p0, pr0') <- replay c0 pr0 r
+      (p1, pr1') <- replay (c0 `Prod` c1) pr1 (pairwise r q)
+      clause p p0
+      clause (pairwise p r) p1
+      pure (p, PARTITION p r c0 c1 pr0' pr1')
+    (_, SPLIT{}) -> undefined
+    (_, FAIL) -> extend c q
+    (_, CHOICE p prs) -> do
+      prs' <- mapM (\pr -> do
+        (p', pr') <- replay c pr q
+        clause p p'
+        pure pr') prs
+      pure (p, CHOICE p prs')
+    (_, COVER c _ p) -> pure (p {- ? -}, COVER c False p)
 
-extend :: Triple -> WriterT [Prop] (State Int) Proof
+extend :: Com -> Prop -> WriterT [Prop] (State Int) (Prop, Proof)
 extend = undefined
 
 solveChc :: [Prop] -> Either (Map Var Prop) (Map Var Prop)
@@ -201,8 +237,11 @@ implies = undefined
 -- extending it at each underapproximation. Then, solve the CHC system and
 -- search for an inductive proof.
 loop :: Triple -> Proof -> State Int (Either (Map Var Prop) Proof)
-loop triple proof = do
-  (proof', chc) <- runWriterT (replay triple proof)
+loop (Triple p c q) proof = do
+  (proof', chc) <- runWriterT (do
+    (p', pr) <- replay c proof q
+    clause p p'
+    pure pr )
   case solveChc chc of
     -- If there is a counterexample, we are done.
     Left counterexample -> pure (Left counterexample)
@@ -214,7 +253,7 @@ loop triple proof = do
                       -- If there is a complete proof, we are done.
                       Just theProof -> pure $ Right theProof
                       -- Otherwise, loop over the larger proof.
-                      Nothing -> loop triple proof'
+                      Nothing -> loop (Triple p c q) proof'
 
 -- | Run the core loop starting from an underapproximation of a potential
 -- proof, the proof which is trivially invalid.
@@ -250,9 +289,9 @@ mkRel voc = do
   put (c+1)
   pure $ PRel ("$rel" ++ show c) (map V $ S.toList voc)
 
-clause :: Prop -> Prop -> Prop
+clause :: MonadWriter [Prop] m => Prop -> Prop -> m ()
 clause pre post =
-  foldr PForall (PImpl pre post) (pvocab (PAnd pre post))
+  tell [foldr PForall (PImpl pre post) (pvocab (PAnd pre post))]
 
 partitions :: Com -> [(Com, Com)]
 partitions (Seq c0 c1) =
@@ -346,8 +385,11 @@ chunk' =
 examplet :: Triple
 examplet = Triple PTrue example PTrue
 
-associate :: Prop -> Prop
-associate = undefined
+associateL, associateR :: Prop -> Prop
+associateL = undefined
+associateR = undefined
+
+
 
 commute :: Prop -> Prop
 commute = \case

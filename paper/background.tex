@@ -1,0 +1,118 @@
+\documentclass[p.tex]{subfiles}
+\begin{document}
+\section{Background}\label{sec:background}
+
+\subsection{Target Language}\label{sec:language}
+
+\begin{figure}
+\begin{spreadlines}{5pt}
+  \begin{gather*}
+    \inference[\textsc{E-Skip}]{%
+    }{%
+      \ceval{\cskip}{\sigma}{\sigma}
+    }
+    \qquad
+    \inference[\textsc{E-Assign}]{%
+    }{%
+      \ceval{\cassign{x}{a}}{\sigma}{\subst{x}{a}{\sigma}}
+    }
+    \qquad
+    \inference[\textsc{E-Assert}]{%
+      \eeval{b}{\sigma}{\btrue}
+    }{%
+      \ceval{\cassert{b}}{\sigma}{\sigma}
+    }
+    \\
+    \inference[\textsc{E-IfTrue}]{%
+      \ceval{c_0}{\sigma_0}{\sigma_1}&
+      \eeval{b}{\sigma_0}{\btrue}
+    }{%
+      \ceval{\cif{b}{c_0}{c_1}}{\sigma_0}{\sigma_1}
+    }
+    \qquad
+    \inference[\textsc{E-IfFalse}]{%
+      \ceval{c_1}{\sigma_0}{\sigma_1}&
+      \eeval{b}{\sigma_0}{\bfalse}
+    }{%
+      \ceval{\cif{b}{c_0}{c_1}}{\sigma_0}{\sigma_1}
+    }
+    \\
+    \inference[\textsc{E-WhileTrue}]{%
+      \ceval{c}{\sigma_0}{\sigma_1}&
+      \ceval{\cwhile{b}{c}}{\sigma_1}{\sigma_2}&
+      \eeval{b}{\sigma_0}{\btrue}
+    }{%
+      \ceval{\cwhile{b}{c}}{\sigma_0}{\sigma_2}
+    }
+    \\
+    \inference[\textsc{E-WhileFalse}]{%
+      \eeval{b}{\sigma}{\bfalse}
+    }{%
+      \ceval{\cwhile{b}{c}}{\sigma}{\sigma}
+    }
+    \qquad
+    \inference[\textsc{E-Sequence}]{%
+      \ceval{c_0}{\sigma_0}{\sigma_1}&
+      \ceval{c_1}{\sigma_1}{\sigma_2}&
+    }{%
+      \ceval{\cseq{c_0}{c_1}}{\sigma_0}{\sigma_2}
+    }
+  \end{gather*}
+  \end{spreadlines}
+  \caption{%
+    The formal semantics of the target language $\lang$, defined in
+    terms of the constituent imperative commands in \com.
+    Metavariables $\sigma, \sigma_0, \ldots$ denote program states in
+    \state, metavariable $x$ denotes a variable in \var, metavariables
+    $c, c_0, \ldots$ denote commands in \com, $a$ denotes an
+    integer-valued expression in $\aexpr$, and $b$ denotes a
+    boolean-valued expression in $\bexpr$.
+  }\label{fig:semantics}
+\end{figure}
+
+In this section we present the imperative language, $\lang$, that we will extend
+and analyze for the remainder of this paper.
+$\lang$ includes
+assignments, conditionals, loops, and assertions.
+%
+$\lang$ makes use of expressions with boolean and integer
+value, denoted $\bexpr$ and $\aexpr$ respectively.
+%
+We denote the space of program variables as \var.
+%
+Each program in $\lang$ is an imperative command.
+We define the space of imperative commands inductively:
+\begin{align*}
+  \com ::=&~\cskip\\
+         |&~\cassign{\var}{\aexpr}\\
+         |&~\cif{\bexpr}{\com}{\com}\\
+         |&~\cwhile{\bexpr}{\com}\\
+         |&~\cassert{\bexpr}\\
+         |&~\cseq{\com}{\com}
+\end{align*}
+
+The command $\cseq{c_0}{c_1}$ is the command which first executes
+$c_0$ and then executes $c_1$ and the command $\cskip$ is a no-op. The
+command $\cassert{b}$ is a static claim that the boolean expression
+$b$ evaluates to true in every possible run of the command. We define
+the formal semantics of the space of commands in \cref{fig:semantics}.
+%
+The program semantics are defined with reference to members of the
+space of program states, which we denote $\state$. A state
+is a map from a variables to integer values:
+%
+\[\state ::= \var \rightarrow \mathbb{Z}\]
+%
+The semantics are typical an imperative language. We will extend
+$\com$ in \cref{sec:product-com}.
+
+\subsection{Hoare Logic}
+
+TODO:
+\begin{itemize}
+  \item Space of assertions
+  \item Definition of Hoare triple
+  \item Traditional system?
+\end{itemize}
+
+\end{document}
