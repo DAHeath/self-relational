@@ -206,6 +206,8 @@ Proof.
     eapply keval_up in H2; eauto.
 Qed.
 
+
+
 Definition Assertion := state -> Prop.
 Definition assert_implies (P Q : Assertion) : Prop :=
   forall st, P st -> Q st.
@@ -221,55 +223,16 @@ Definition triple (P:Assertion) (c:com) (Q:Assertion) : Prop :=
 
 Notation "{{ P }} c {{ Q }}" := (triple P c Q) (at level 90, c at next level).
 
+Definition ktriple (k:nat) (P:Assertion) (c:com) (Q:Assertion) : Prop :=
+  forall st st', keval k c st st' -> P st -> Q st'.
+
+Notation "k |- {{ P }} c {{ Q }}" := (ktriple k P c Q) (at level 90, c at next level).
+
 Definition bassn b : Assertion :=
   fun st => match st with
             | singleton s => (beval s b = true)
             | composite _ _ => False
             end.
-
-Theorem skip : forall P, {{P}} cskip {{P}}.
-Proof.
-  unfold triple.
-  intros.
-  inversion H; subst; auto.
-Qed.
-
-(* TODO *)
-Axiom while : forall P c0 n e,
-  ({{P}} cwhile e c0 {{P}} ->
-   {{P}} cseq (cif e c0 cskip) (cwhile e c0) {{P}}) ->
-  {{P}} cwhile e c0 {{P}}.
-
-Theorem consequence : forall P P' Q Q' c,
-  assert_implies P P' ->
-  assert_implies Q' Q ->
-  {{P'}} c {{Q'}} ->
-  {{P}} c {{Q}}.
-Proof. unfold triple, assert_implies; eauto. Qed.
-
-Theorem assign : forall P x e,
-  {{ assn_sub x e P }} cassign x e {{P}}.
-Proof.
-  unfold triple; intros; inversion H; subst; auto.
-Qed.
-
-Definition first (P:Assertion) (f:state -> Prop) : Assertion :=
-  fun st => match st with
-  | composite st0 st1 => P st /\ f st0
-  | _ => False
-  end.
-
-Theorem hoare_if : forall P Q e c0 c1 c2,
-  {{first P (fun st => bassn e st)}} cprod c0 c2 {{Q}} ->
-  {{first P (fun st => ~(bassn e st))}} cprod c1 c2 {{Q}} ->
-  {{P}} cprod (cif e c0 c1) c2 {{Q}}.
-Proof.
-  unfold triple; intros.
-  inversion H1; subst.
-  inversion H5; subst.
-  - eapply H. constructor; eauto. simpl; eauto.
-  - eapply H0. constructor; eauto. simpl. split; eauto. congruence.
-Qed.
 
 Inductive partition : com -> com -> com -> Prop :=
 | PartL : forall c0 c0' c0'' c1,
@@ -356,6 +319,148 @@ Proof.
     + apply H0 with st; auto.
 Qed.
 
+Theorem skip : forall P, {{P}} cskip {{P}}.
+Proof.
+  unfold triple.
+  intros.
+  inversion H; subst; auto.
+Qed.
+
+Definition first (P:Assertion) (f:state -> Prop) : Assertion :=
+  fun st => match st with
+  | composite st0 st1 => P st /\ f st0
+  | _ => False
+  end.
+
+(* Theorem while' : forall P e c0 c1, *)
+(*   (1* {{P}} cprod cskip c1 {{P}} -> *1) *)
+(*   {{first P (fun st => bassn e st)}} cprod c0 c1 {{P}} -> *)
+(*   {{P}} cprod (cwhile e c0) c1 {{first P (fun st => ~(bassn e st))}}. *)
+(* Proof. *)
+(*   unfold triple. *)
+(*   intros. *)
+(*   inversion H0; subst. *)
+(*   remember (cwhile e c0) as Hc. *)
+(*   induction H0; try inversion HeqHc; simpl in *; subst. *)
+(*   - simpl. *)
+(*   - split. *)
+(*     eapply H. *)
+(*     inversion H0; subst. *)
+(*     inversion H6; subst. *)
+    
+
+Theorem seq : forall (P Q R : Assertion) c0 c1 c2,
+  partition c1 c2 c0 ->
+  {{P}} c1 {{Q}} ->
+  {{Q}} c2 {{R}} ->
+  {{P}} c0 {{R}}.
+Proof.
+  intros.
+  eapply part; eauto.
+  eapply split; simpl; eauto.
+Qed.
+
+Theorem kseq : forall k (P Q R : Assertion) c0 c1,
+  k |- {{P}} c0 {{Q}} ->
+  k |- {{Q}} c1 {{R}} ->
+  k |- {{P}} cseq c0 c1 {{R}}.
+Proof.
+  unfold ktriple.
+  intros.
+  inversion H1; subst.
+  eapply H0; eauto.
+  eapply H; eauto.
+Qed.
+
+Definition pre := pred.
+
+Theorem ktriple_up : forall k k' P Q c,
+  k <= k' ->
+  k' |- {{P}} c {{Q}} ->
+  k |- {{P}} c {{Q}}.
+Proof.
+  unfold ktriple.
+  intros.
+  eapply H0.
+  eapply  keval_up in H1.
+  apply H1.
+  auto.
+  auto.
+Qed.
+
+Theorem kwhile : forall k P c0 e,
+  (pre k |- {{fun st => P st /\ bassn e st}}c0{{P}}) ->
+  ((pre k |- {{P}} cwhile e c0 {{fun st => P st /\ ~(bassn e st)}}) ->
+   (pre k |- {{P}} cseq (cif e c0 cskip) (cwhile e c0) {{fun st => P st /\ ~(bassn e st)}})) ->
+  (k |- {{P}} cwhile e c0 {{fun st => P st /\ ~(bassn e st)}}).
+Proof.
+  intros.
+  induction k.
+  - unfold ktriple. intros.
+    inversion H1; subst. unfold bassn. split; auto; congruence.
+  - simpl in *.
+    unfold ktriple. intros.
+    inversion H1; clear H1; subst.
+    + (* True *)
+      eapply H0.
+      eapply IHk.
+      eapply ktriple_up in H.
+      apply H.
+      unfold pre.
+      omega.
+      intros.
+      apply kseq with P.
+      unfold ktriple; intros.
+      inversion H3; subst.
+      unfold ktriple in H.
+      eapply H.
+      eapply keval_up in H15.
+      apply H15.
+      unfold pre.
+      omega.
+      split; auto.
+      inversion H15; subst.
+      auto.
+      auto.
+      econstructor.
+      eapply KIfTrue; eauto.
+      eauto.
+      eauto.
+    + (* False *)
+      split. auto. unfold bassn. congruence.
+Qed.
+
+(* TODO *)
+Axiom while : forall P c0 n e,
+  ({{P}} cwhile e c0 {{fun st => P st /\ ~(bassn e st)}} ->
+   {{P}} cseq (cif e c0 cskip) (cwhile e c0) {{fun st => P st /\ ~(bassn e st)}}) ->
+  {{P}} cwhile e c0 {{fun st => P st /\ ~(bassn e st)}}.
+
+Theorem consequence : forall P P' Q Q' c,
+  assert_implies P P' ->
+  assert_implies Q' Q ->
+  {{P'}} c {{Q'}} ->
+  {{P}} c {{Q}}.
+Proof. unfold triple, assert_implies; eauto. Qed.
+
+Theorem assign : forall P x e,
+  {{ assn_sub x e P }} cassign x e {{P}}.
+Proof.
+  unfold triple; intros; inversion H; subst; auto.
+Qed.
+
+Theorem hoare_if : forall P Q e c0 c1 c2,
+  {{first P (fun st => bassn e st)}} cprod c0 c2 {{Q}} ->
+  {{first P (fun st => ~(bassn e st))}} cprod c1 c2 {{Q}} ->
+  {{P}} cprod (cif e c0 c1) c2 {{Q}}.
+Proof.
+  unfold triple; intros.
+  inversion H1; subst.
+  inversion H5; subst.
+  - eapply H. constructor; eauto. simpl; eauto.
+  - eapply H0. constructor; eauto. simpl. split; eauto. congruence.
+Qed.
+
 Definition commute (P:Assertion) : Assertion :=
   fun st => match st with
             | singleton st => False
@@ -409,15 +514,4 @@ Proof.
   inversion H3; subst.
   apply H0.
   split; repeat (try (eapply H2); try (eapply H1); try (eapply H); eauto).
-Qed.
-
-Theorem seq : forall (P Q R : Assertion) c0 c1 c2,
-  partition c1 c2 c0 ->
-  {{P}} c1 {{Q}} ->
-  {{Q}} c2 {{R}} ->
-  {{P}} c0 {{R}}.
-Proof.
-  intros.
-  eapply part; eauto.
-  eapply split; simpl; eauto.
 Qed.
