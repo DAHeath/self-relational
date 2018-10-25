@@ -1,5 +1,7 @@
 Require Import PeanoNat.
 Require Import Coq.Lists.List.
+Require Import Coq.Arith.Max.
+Require Import Coq.omega.Omega.
 
 Inductive aoper :=
 | oadd : aoper
@@ -32,8 +34,7 @@ Inductive com :=
 | cskip : com
 | cassign : nat -> aexpr -> com
 | cif : bexpr -> com -> com -> com
-| cwhile : nat -> bexpr -> com -> com
-(* | ccall : nat -> nat -> nat -> com *)
+| cwhile : bexpr -> com -> com
 | cseq : com -> com -> com
 | cprod : com -> com -> com.
 
@@ -98,14 +99,14 @@ Inductive ceval : com -> state -> state -> Prop :=
     beval st e = false ->
     ceval c2 (singleton st) (singleton st') ->
     ceval (cif e c1 c2) (singleton st) (singleton st')
-| EWhileTrue : forall st st' st'' n e c,
+| EWhileTrue : forall st st' st'' e c,
     beval st e = true ->
     ceval c (singleton st) (singleton st') ->
-    ceval (cwhile n e c) (singleton st') (singleton st'') ->
-    ceval (cwhile (S n) e c) (singleton st) (singleton st'')
+    ceval (cwhile e c) (singleton st') (singleton st'') ->
+    ceval (cwhile e c) (singleton st) (singleton st'')
 | EWhileFalse : forall st e c,
     beval st e = false ->
-    ceval (cwhile 0 e c) (singleton st) (singleton st)
+    ceval (cwhile e c) (singleton st) (singleton st)
 | ESeq : forall st st' st'' c1 c2,
     ceval c1 st st' ->
     ceval c2 st' st'' ->
@@ -115,6 +116,95 @@ Inductive ceval : com -> state -> state -> Prop :=
     ceval c2 st2 st2' ->
     ceval (cprod c1 c2) (composite st1 st2) (composite st1' st2').
 Hint Constructors ceval.
+
+(* Evaluation relation where while depth is restricted to k iterations. *)
+Inductive keval : nat -> com -> state -> state -> Prop :=
+| KSkip : forall k st, keval k cskip st st
+| KAssign : forall k st x e n,
+    aeval st e = n ->
+    keval k (x ::= e) (singleton st) (singleton (stupdate x n st))
+| KIfTrue : forall k st st' e c1 c2,
+    beval st e = true ->
+    keval k c1 (singleton st) (singleton st') ->
+    keval k (cif e c1 c2) (singleton st) (singleton st')
+| KIfFalse : forall k st st' e c1 c2,
+    beval st e = false ->
+    keval k c2 (singleton st) (singleton st') ->
+    keval k (cif e c1 c2) (singleton st) (singleton st')
+| KWhileTrue : forall k st st' st'' e c,
+    beval st e = true ->
+    keval k c (singleton st) (singleton st') ->
+    keval k (cwhile e c) (singleton st') (singleton st'') ->
+    keval (S k) (cwhile e c) (singleton st) (singleton st'')
+| KWhileFalse : forall k st e c,
+    beval st e = false ->
+    keval k (cwhile e c) (singleton st) (singleton st)
+| KSeq : forall k st st' st'' c1 c2,
+    keval k c1 st st' ->
+    keval k c2 st' st'' ->
+    keval k (cseq c1 c2) st st''
+| KProd : forall k st1 st1' st2 st2' c1 c2,
+    keval k c1 st1 st1' ->
+    keval k c2 st2 st2' ->
+    keval k (cprod c1 c2) (composite st1 st2) (composite st1' st2').
+Hint Constructors keval.
+
+Lemma keval_up : forall st st' c k k',
+  k <= k' -> keval k c st st' -> keval k' c st st'.
+Proof.
+  intros.
+  generalize dependent k'.
+  induction H0; auto; intros.
+  - destruct k'.
+    inversion H0.
+    eapply KWhileTrue; eauto.
+    eapply IHkeval1; omega.
+    eapply IHkeval2; omega.
+  - eapply KSeq.
+    eapply IHkeval1; auto.
+    eapply IHkeval2; auto.
+Qed.
+
+Lemma keval_ceval : forall st st' c,
+  ceval c st st' -> exists k, keval k c st st'.
+Proof.
+  induction 1.
+  - exists 0. auto.
+  - exists 0. auto.
+  - inversion IHceval; subst.
+    exists x.
+    eapply KIfTrue; auto.
+  - inversion IHceval; subst.
+    exists x.
+    eapply KIfFalse; auto.
+  - inversion IHceval1; subst.
+    inversion IHceval2; subst.
+    exists (S (max x x0)).
+    eapply KWhileTrue; eauto.
+    assert (x <= max x x0). apply le_max_l.
+    eapply keval_up in H2.
+    eapply H2.
+    auto.
+    assert (x0 <= max x x0). apply le_max_r.
+    eapply keval_up in H3.
+    eapply H3.
+    auto.
+  - exists 0. auto.
+  - inversion IHceval1; subst.
+    inversion IHceval2; subst.
+    exists (max x x0).
+    assert (x <= max x x0). apply le_max_l.
+    assert (x0 <= max x x0). apply le_max_r.
+    eapply keval_up in H1; eauto.
+    eapply keval_up in H2; eauto.
+  - inversion IHceval1; subst.
+    inversion IHceval2; subst.
+    exists (max x x0).
+    assert (x <= max x x0). apply le_max_l.
+    assert (x0 <= max x x0). apply le_max_r.
+    eapply keval_up in H1; eauto.
+    eapply keval_up in H2; eauto.
+Qed.
 
 Definition Assertion := state -> Prop.
 Definition assert_implies (P Q : Assertion) : Prop :=
@@ -146,9 +236,9 @@ Qed.
 
 (* TODO *)
 Axiom while : forall P c0 n e,
-  ({{P}} cwhile n e c0 {{P}} ->
-   {{P}} cseq (cif e c0 cskip) (cwhile n e c0) {{P}}) ->
-  {{P}} cwhile (S n) e c0 {{P}}.
+  ({{P}} cwhile e c0 {{P}} ->
+   {{P}} cseq (cif e c0 cskip) (cwhile e c0) {{P}}) ->
+  {{P}} cwhile e c0 {{P}}.
 
 Theorem consequence : forall P P' Q Q' c,
   assert_implies P P' ->
