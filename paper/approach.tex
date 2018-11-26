@@ -11,8 +11,8 @@ different program states. However, by considering them together we can
 establish relationships between different programs or even different
 parts of the same program.
 
-To give semantic meaning to this new construction, we extend our
-definition of state:
+To give semantic meaning to this new construction, we extend the
+definition of the space of program states:
 \[\state ::= \var \rightarrow \mathbb{Z}~|~\sprod{\state}{\state}\]
 As in \cref{sec:language}, a state contains mappings from variables to integer
 values. However, this new definition extends allows multiple
@@ -22,11 +22,11 @@ commands only make progress when the state is a singleton map. The new
 parallel construction allows us to define sensible formal semantics for
 product commands:
 \begin{align*}
-  \inference[E-Product]{%
-    \ceval{c_0}{\sigma_0}{\sigma_2}&
-    \ceval{c_1}{\sigma_1}{\sigma_3}
+  \inference[\textsc{E-Prod}]{%
+    \ceval{c_0}{\sigma_0}{\sigma_0'}&
+    \ceval{c_1}{\sigma_1}{\sigma_1'}&
   }{%
-    \ceval{\cprod{c_0}{c_1}}{\sprod{\sigma_0}{\sigma_1}}{\sprod{\sigma_2}{\sigma_3}}
+    \ceval{\cprod{c_0}{c_1}}{\sprod{\sigma_0}{\sigma_1}}{\sprod{\sigma_0'}{\sigma_1'}}
   }
 \end{align*}
 That is, two parallel commands executed over two parallel states
@@ -34,165 +34,216 @@ execute independently.
 
 TODO
 
-\subsection{Partitioning Commands}\label{sec:partition}
+\subsection{A Self-Relational Proof System}
+\begin{figure}
+\begin{spreadlines}{5pt}
+\begin{subequations}
+\begin{gather*}
+  \inference[\textsc{Assign}]{%
+  }{%
+    \hoare{\subst{x}{a}{P}}{\cassign{x}{a}}{P}
+  }
+  \qquad
+  \inference[\textsc{Skip}]{%
+  }{%
+    \hoare{P}{\cskip}{P}
+  }
+  \qquad
+  \inference[\textsc{Cons}]{%
+    P \Rightarrow P'&
+    \hoare{P'}{c}{Q'}&
+    Q' \Rightarrow Q
+  }{%
+    \hoare{P}{c}{Q}
+  }
+  \\
+  \inference[\textsc{Iso}]{%
+    c_0 \cong c_1&
+    \hoare{P}{c_1}{Q}
+  }{%
+    \hoare{P}{c_0}{Q}
+  }
+  \qquad
+  \inference[\textsc{Sum}]{%
+    \hoare{P}{c_0}{Q}&
+    \hoare{P}{c_1}{Q}
+  }{%
+    \hoare{P}{\csum{c_0}{c_1}}{Q}
+  }
+  \qquad
+  \inference[\textsc{Assert}]{%
+  }{%
+    \hoare{P}{\cassert{b}}{P \land b}
+  }
+  \end{gather*}
+  \begin{empheq}[box=\fbox]{gather*}
+  \inference[\textsc{Seq}]{%
+    \hoare{P}{c_0}{R}&
+    \hoare{\pairwise(P,R)}{c_0 \times c_1}{\pairwise(R, Q)}
+  }{%
+    \hoare{P}{\cseq{c_0}{c_1}}{Q}
+  }
+  \\
+  \inference[\textsc{Prod}]{%
+    \hoare{P_0}{c_0}{Q_0}&
+    \forall \sigma_0, \sigma_1.\!~\,P(\sigma_0 \otimes \sigma_1) \Rightarrow
+      P_{\,0}(\sigma_0) \land P_{\,1}(\sigma_1)\\
+    \hoare{P_1}{c_1}{Q_1}&
+    \forall \sigma_0, \sigma_1.~Q(\sigma_0 \otimes \sigma_1) \Leftarrow
+      Q_0(\sigma_0) \land Q_1(\sigma_1)\\
+  }{%
+    \hoare{P}{c_0 \times c_1}{Q}
+  }
+  \\
+  \inference[\textsc{Comm}]{%
+    \hoare{\commute~P}{c_1 \times c_0}{\commute~Q}
+  }{%
+    \hoare{P}{c_0 \times c_1}{Q}
+  }
+  \qquad
+  \inference[\textsc{Assoc}]{%
+    \hoare{\associate~P}{(c_0 \times c_1) \times c_2}{\associate~Q}
+  }{%
+    \hoare{P}{c_0 \times (c_1 \times c_2)}{Q}
+  }
+  \\
+  \qquad
+  \inference[\textsc{Loop}]{%
+    \hasbody{c_0}{c_1}&
+    \hoare{P}{c_1}{P}
+  }{%
+    \hoare{P}{c_0}{P}
+  }
+  \end{empheq}
+  \begin{gather*}
+  \inference[\textsc{B-Loop}]{%
+  }{%
+    \hasbody{\cloop{c}}{c}
+  }
+  % \qquad
+  % \inference[\textsc{B-Skip}]{%
+  % }{%
+  %   \hasbody{\cskip}{\cskip}
+  % }
+  \qquad
+  \inference[\textsc{B-Prod}]{%
+    \hasbody{c_0}{c_0'}&
+    \hasbody{c_1}{c_1'}
+  }{%
+    \hasbody{\cprod{c_0}{c_1}}{\cprod{c_0'}{c_1'}}
+  }
+  \\
+  \commute(P) := \lambda(\sigma_0 \otimes \sigma_1).~P(\sigma_1 \otimes \sigma_0)\\
+  \associate(P) :=%
+  \lambda((\sigma_0 \otimes \sigma_1) \otimes \sigma_2).~P(\sigma_0
+  \otimes (\sigma_1 \otimes \sigma_2))\\
+  \pairwise(P, Q) := \lambda(\sprod{\sigma_0}{\sigma_1}).~P(\sigma_0) \land Q(\sigma_1)
+\end{gather*}
+\end{subequations}
+\end{spreadlines}
+\caption{The self-relational proof system. Judgements are over
+Hoare Triples. Key rules that deviate from more traditional Hoare
+Logic systems are boxed.
+$\textsf{HasBody}$, $\textsf{commute}$, $\textsf{associate}$, and
+$\textsf{pairwise}$ are helper definitions for the proof rules.
+Metavariables $P, Q, R\ldots$ represent program
+assertions. Other metavariables are consistent with
+\cref{fig:semantics}}\label{fig:proof-system}
+\end{figure}
+
+\subsection{Command Isomorphisms}
+
 \begin{figure}
 \begin{spreadlines}{5pt}
 \begin{gather*}
-  \inference[\textsc{P-SequenceLeft}]{%
-    \relpart{c_0'}{c_0''}{c_0}
+  % \inference[\textsc{I-Refl}]{%
+  % }{%
+  %   c \cong c
+  % }
+  % \qquad
+  % \inference[\textsc{I-Symm}]{%
+  %   c_1 \cong c_0
+  % }{%
+  %   c_0 \cong c_1
+  % }
+  % \qquad
+  % \inference[\textsc{I-Trans}]{%
+  %   c_0 \cong c_1&
+  %   c_1 \cong c_2
+  % }{%
+  %   c_0 \cong c_2
+  % }
+  % \\
+  \inference[$\textsc{I-Skip}_L$]{%
   }{%
-    \relpart{c_0'}{(\cseq{c_0''}{c_1})}{(\cseq{c_0}{c_1})}
+    \cseq{\cskip}{c} \cong c
   }
   \qquad
-  \inference[\textsc{P-SequenceRight}]{%
-    \relpart{c_1'}{c_1''}{c_1}
+  \inference[$\textsc{I-Skip}_R$]{%
   }{%
-    \relpart{(\cseq{c_0}{c_1'})}{c_1''}{(\cseq{c_0}{c_1})}
+    \cseq{c}{\cskip} \cong c
   }
+  % \qquad
+  % \inference[\textsc{I-SeqAssoc}]{%
+  % }{%
+  %   \cseq{c_0}{(\cseq{c_1}{c_2})} \cong \cseq{(\cseq{c_0}{c_1})}{c_2}
+  % }
+  % \\
+  % \inference[\textsc{I-SkipProd}]{%
+  % }{%
+  %   \cprod{\cskip}{\cskip} \cong \cskip
+  % }
   \\
-  \inference[\textsc{P-Sequence}]{%
+  \inference[\textsc{I-SeqProd}]{%
   }{%
-    \relpart{c_0}{c_1}{(\cseq{c_0}{c_1})}
-  }
-  \\
-  \inference[\textsc{P-SkipLeft}]{%
-  }{%
-    \relpart{\cskip}{c}{c}
+    \cprod{(\cseq{c_0}{c_1})}{(\cseq{c_2}{c_3})} \cong
+    \cseq{(\cprod{c_0}{c_2})}{(\cprod{c_1}{c_3})}
   }
   \qquad
-  \inference[\textsc{P-SkipRight}]{%
+  \inference[\textsc{I-Unroll}]{%
   }{%
-    \relpart{c}{\cskip}{c}
+    \cloop{c} \cong \cloop{\cseq{c}{(\csum{c}{\cskip})}}
   }
+  % \qquad
+  % \inference[\textsc{I-Loop}]{%
+  %   c \cong c'
+  % }{%
+  %   \cloop{c} \cong \cloop{c'}
+  % }
   \\
-  \inference[\textsc{P-Product}]{%
-    \relpart{c_0'}{c_0''}{c_0}&
-    \relpart{c_1'}{c_1''}{c_1}
+  % \inference[\textsc{I-Seq}]{%
+  %   c_0 \cong c_0'&
+  %   c_1 \cong c_1'
+  % }{%
+  %   \cseq{c_0}{c_1} \cong \cseq{c_0'}{c_1'}
+  % }
+  % \qquad
+  % \inference[\textsc{I-Prod}]{%
+  %   c_0 \cong c_0'&
+  %   c_1 \cong c_1'
+  % }{%
+  %   \cprod{c_0}{c_1} \cong \cprod{c_0'}{c_1'}
+  % }
+  % \qquad
+  % \inference[\textsc{I-Sum}]{%
+  %   c_0 \cong c_0'&
+  %   c_1 \cong c_1'
+  % }{%
+  %   \csum{c_0}{c_1} \cong \csum{c_0'}{c_1'}
+  % }
+  % \\
+  \inference[\textsc{I-SumProd}]{%
   }{%
-    \relpart{(\cprod{c_0'}{c_1'})}{(\cprod{c_0''}{c_1''})}{(\cprod{c_0}{c_1})}
+    \cprod{(\csum{c_0}{c_1})}{c_2} \cong
+    \csum{(\cprod{c_0}{c_2})}{(\cprod{c_1}{c_2})}
   }
 \end{gather*}
 \end{spreadlines}
 \caption{%
-  Natural deductions that define the partition relation,
-  $\textsf{part}$. Metavariables $c_0, c_1, \ldots$ range over the
-  space of commands, $\com$.
-}\label{fig:partition}
+  Program isomorphisms that are useful in conjunction with the
+  self-relational proof system. Metavariables are consistent with
+  \cref{fig:semantics}.
+}
 \end{figure}
-
-In order to cut our programs into pieces so that we can reason about
-multiple pieces simultaneously, we need a formal notion of what
-cutting a program means. Informally, we can think of an arbitrary
-command as composed of some vector of subcommands sequenced
-together. We would like to be able to choose an arbitrary position
-in this vector, \emph{partition} the vector at this point, and then
-reason about the two partitions together.
-%
-We construct a relation, $\textsf{part}$, which formalizes this
-intuition. When two commands $c_0$ and $c_1$ form a partition of
-another command $c_2$, we write $\relpart{c_0}{c_1}{c_2}$.
-\Cref{fig:partition} defines this relation.
-
-The partition relation is useful because the partitions of a command
-preserve the semantic meaning of the original command:
-\begin{theorem}
-  Let $c_0, c_1, c_2 \in \com$ be commands such that
-  $\relpart{c_0}{c_1}{c_2}$ and let $\sigma_0, \sigma_1 \in
-  \state$ be program states. Then the semantic meaning of $c_2$ is
-  the same as the semantic meaning of $c_0$ sequenced with $c_1$:
-  \[
-  \ceval{c_2}{\sigma_0}{\sigma_1}
-  \iff
-  \ceval{\cseq{c_0}{c_1}}{\sigma_0}{\sigma_1}
-  \]
-\end{theorem}
-\begin{proof}
-  By induction on the construction of the partition, using
-  the fact that command sequencing is associative with respect
-  to the semantics. Details formalized in Coq.
-\end{proof}
-
-Using the partition relation, we can generalize the Hoare Logic rule
-for sequences of commands:
-\begin{align*}
-  \inference[$\textsc{Part}_0$]{%
-    \hoare{P}{c_1}{Q}&
-    \hoare{Q}{c_2}{R}&
-    \relpart{c_1}{c_2}{c_0}
-  }{%
-    \hoare{P}{c_0}{R}
-  }
-\end{align*}
-While this rule is a generalization of the classic Hoare logic
-sequence rule in the sense that we can reclaim the traditional rule
-from this one (but not vice versa), it does not allow us to prove
-anything new. In the next section we will combine partitioning with
-product commands to yield a more expressive proof rule (and
-an accompanying set of other rules).
-
-\subsection{A Self-Relational Proof System}
-\begin{figure}
-\begin{spreadlines}{5pt}
-\begin{gather*}
-  \inference[If]{%
-    \judgement{\Gamma}{P \land b}{c_0 \times c_2}{Q}&
-    \judgement{\Gamma}{P \land \neg b}{c_1 \times c_2}{Q}&
-  }{%
-    \judgement{\Gamma}{P}{\cprod{\cif{b}{c_0}{c_1}}{c_2}}{Q}
-  }
-  \\
-  \inference[$\textsc{While}$]{%
-    \judgement{%
-      \Gamma \cup \hoare{P}{\cwhile{b}{c_0} \times c_1}{Q \land \neg e}
-    }{P}{\cif{b}{c_0}{\cskip}~;~\cwhile{b}{c_0} \times c_1}{Q}
-  }{%
-    \judgement{\Gamma}{P}{\cwhile{b}{c_0} \times c_1}{Q \land \neg e}
-  }
-  \\
-  \inference[\textsc{Split}]{%
-    \judgement{\Gamma}{P_0}{c_0}{Q_0}&
-    \forall \sigma_0, \sigma_1.~P(\sigma_0 \otimes \sigma_1) \Rightarrow
-      P_0(\sigma_0) \land P_1(\sigma_1)\\
-    \judgement{\Gamma}{P_1}{c_1}{Q_1}&
-    \forall \sigma_0, \sigma_1.~Q(\sigma_0 \otimes \sigma_1) \Leftarrow
-      Q_0(\sigma_0) \land Q_1(\sigma_1)\\
-  }{%
-    \judgement{\Gamma}{P}{c_0 \times c_1}{Q}
-  }
-  \\
-  \inference[\textsc{Comm}]{%
-    \judgement{\Gamma}{\commute~P}{c_1 \times c_0}{\commute~Q}
-  }{%
-    \judgement{\Gamma}{P}{c_0 \times c_1}{Q}
-  }
-  \qquad
-  \inference[\textsc{Assoc}]{%
-    \judgement{\Gamma}{\associate~P}{(c_0 \times c_1) \times c_2}{\associate~Q}
-  }{%
-    \judgement{\Gamma}{P}{c_0 \times (c_1 \times c_2)}{Q}
-  }
-  \\
-  \commute(P) := \lambda(\sigma_0 \otimes \sigma_1).~P(\sigma_1 \otimes \sigma_0)\\
-  \associate(P) := \lambda((\sigma_0 \otimes \sigma_1) \otimes
-  \sigma_2)).~P(\sigma_0 \otimes (\sigma_1 \otimes \sigma_2))
-\end{gather*}
-\end{spreadlines}
-\caption{}\label{fig:proof-system}
-\end{figure}
-
-The key idea is to construct a Hoare-style proof rule for
-partitioning, but that allows us to consider the two partitions
-together as a product:
-\begin{gather*}
-  \inference[$\textsc{Part}$]{%
-    \relpart{c_0}{c_1}{c_2}&
-    \judgement{\Gamma}{P}{c_1}{R}&
-    \judgement{\Gamma}{\pairwise(P,R)}{c_1 \times c_2}{\pairwise(R,Q)}
-  }{%
-    \judgement{\Gamma}{P}{c_0}{R}
-  }
-  \\
-  \textsf{pairwise}(P, Q) := \lambda(\sprod{\sigma_0}{\sigma_1}).~P(\sigma_0) \land Q(\sigma_1)
-\end{gather*}
 
 \end{document}

@@ -6,59 +6,55 @@
 
 \begin{figure}
 \begin{spreadlines}{5pt}
-  \begin{gather*}
-    \inference[\textsc{E-Skip}]{%
-    }{%
-      \ceval{\cskip}{\sigma}{\sigma}
-    }
-    \qquad
-    \inference[\textsc{E-Assign}]{%
-    }{%
-      \ceval{\cassign{x}{a}}{\sigma}{\subst{x}{a}{\sigma}}
-    }
-    \qquad
-    \inference[\textsc{E-Assert}]{%
-      \eeval{b}{\sigma}{\btrue}
-    }{%
-      \ceval{\cassert{b}}{\sigma}{\sigma}
-    }
-    \\
-    \inference[\textsc{E-IfTrue}]{%
-      \ceval{c_0}{\sigma_0}{\sigma_1}&
-      \eeval{b}{\sigma_0}{\btrue}
-    }{%
-      \ceval{\cif{b}{c_0}{c_1}}{\sigma_0}{\sigma_1}
-    }
-    \qquad
-    \inference[\textsc{E-IfFalse}]{%
-      \ceval{c_1}{\sigma_0}{\sigma_1}&
-      \eeval{b}{\sigma_0}{\bfalse}
-    }{%
-      \ceval{\cif{b}{c_0}{c_1}}{\sigma_0}{\sigma_1}
-    }
-    \\
-    \inference[\textsc{E-WhileTrue}]{%
-      \ceval{c}{\sigma_0}{\sigma_1}&
-      \ceval{\cwhile{b}{c}}{\sigma_1}{\sigma_2}&
-      \eeval{b}{\sigma_0}{\btrue}
-    }{%
-      \ceval{\cwhile{b}{c}}{\sigma_0}{\sigma_2}
-    }
-    \\
-    \inference[\textsc{E-WhileFalse}]{%
-      \eeval{b}{\sigma}{\bfalse}
-    }{%
-      \ceval{\cwhile{b}{c}}{\sigma}{\sigma}
-    }
-    \qquad
-    \inference[\textsc{E-Sequence}]{%
-      \ceval{c_0}{\sigma_0}{\sigma_1}&
-      \ceval{c_1}{\sigma_1}{\sigma_2}&
-    }{%
-      \ceval{\cseq{c_0}{c_1}}{\sigma_0}{\sigma_2}
-    }
-  \end{gather*}
-  \end{spreadlines}
+\begin{gather*}
+  \inference[\textsc{E-Skip}]{%
+  }{%
+    \ceval{\cskip}{\sigma}{\sigma}
+  }
+  \qquad
+  \inference[\textsc{E-Assign}]{%
+  }{%
+    \ceval{\cassign{x}{a}}{\sigma}{\subst{x}{a}{(\sigma)}}
+  }
+  \\
+  \inference[\textsc{E-Assert}]{%
+    \eeval{b}{\sigma}{\btrue}
+  }{%
+    \ceval{\cassert{b}}{\sigma}{\sigma}
+  }
+  \qquad
+  \inference[\textsc{E-Sequence}]{%
+    \ceval{c_0}{\sigma_0}{\sigma_1}&
+    \ceval{c_1}{\sigma_1}{\sigma_2}&
+  }{%
+    \ceval{\cseq{c_0}{c_1}}{\sigma_0}{\sigma_2}
+  }
+  \\
+  \inference[\textsc{E-SumLeft}]{%
+    \ceval{c_0}{\sigma_0}{\sigma_1}
+  }{%
+    \ceval{\csum{c_0}{c_1}}{\sigma_0}{\sigma_1}
+  }
+  \qquad
+  \inference[\textsc{E-SumRight}]{%
+    \ceval{c_1}{\sigma_0}{\sigma_1}
+  }{%
+    \ceval{\csum{c_0}{c_1}}{\sigma_0}{\sigma_1}
+  }
+  \\
+  \inference[\textsc{E-Loop}]{%
+    \ceval{c}{\sigma_0}{\sigma_1}&
+    \ceval{\cloop{c}}{\sigma_1}{\sigma_2}&
+  }{%
+    \ceval{\cloop{c}}{\sigma_0}{\sigma_2}
+  }
+  \qquad
+  \inference[\textsc{E-Break}]{%
+  }{%
+    \ceval{\cloop{c}}{\sigma}{\sigma}
+  }
+\end{gather*}
+\end{spreadlines}
   \caption{%
     The formal semantics of the target language $\lang$, defined in
     terms of the constituent imperative commands in \com.
@@ -73,7 +69,7 @@
 In this section we present the imperative language, $\lang$, that we will extend
 and analyze for the remainder of this paper.
 $\lang$ includes
-assignments, conditionals, loops, and assertions.
+assignments, branches, loops, and assertions.
 %
 $\lang$ makes use of expressions with boolean and integer
 value, denoted $\bexpr$ and $\aexpr$ respectively.
@@ -85,10 +81,10 @@ We define the space of imperative commands inductively:
 \begin{align*}
   \com ::=&~\cskip\\
          |&~\cassign{\var}{\aexpr}\\
-         |&~\cif{\bexpr}{\com}{\com}\\
-         |&~\cwhile{\bexpr}{\com}\\
          |&~\cassert{\bexpr}\\
-         |&~\cseq{\com}{\com}
+         |&~\cseq{\com}{\com}\\
+         |&~\csum{\com}{\com}\\
+         |&~\cloop{\com}
 \end{align*}
 
 The command $\cseq{c_0}{c_1}$ is the command which first executes
@@ -102,9 +98,6 @@ space of program states, which we denote $\state$. A state
 is a map from a variables to integer values:
 %
 \[\state ::= \var \rightarrow \mathbb{Z}\]
-%
-The semantics are typical an imperative language. We will extend
-$\com$ in \cref{sec:product-com}.
 
 \subsection{Hoare Logic}
 
