@@ -57,13 +57,6 @@ TODO
     \hoare{P}{c}{Q}
   }
   \\
-  \inference[\textsc{Iso}]{%
-    c_0 \cong c_1&
-    \hoare{P}{c_1}{Q}
-  }{%
-    \hoare{P}{c_0}{Q}
-  }
-  \qquad
   \inference[\textsc{Sum}]{%
     \hoare{P}{c_0}{Q}&
     \hoare{P}{c_1}{Q}
@@ -75,8 +68,21 @@ TODO
   }{%
     \hoare{P}{\cassert{b}}{P \land b}
   }
+  \qquad
+  \inference[\textsc{Loop}]{%
+    \hoare{P}{c}{P}
+  }{%
+    \hoare{P}{\cloop{c}}{P}
+  }
   \end{gather*}
   \begin{empheq}[box=\fbox]{gather*}
+  \inference[\textsc{Iso}]{%
+    c_0 \cong c_1&
+    \hoare{P}{c_1}{Q}
+  }{%
+    \hoare{P}{c_0}{Q}
+  }
+  \qquad
   \inference[\textsc{Seq}]{%
     \hoare{P}{c_0}{R}&
     \hoare{\pairwise(P,R)}{c_0 \times c_1}{\pairwise(R, Q)}
@@ -106,33 +112,8 @@ TODO
   }{%
     \hoare{P}{c_0 \times (c_1 \times c_2)}{Q}
   }
-  \\
-  \qquad
-  \inference[\textsc{Loop}]{%
-    \hasbody{c_0}{c_1}&
-    \hoare{P}{c_1}{P}
-  }{%
-    \hoare{P}{c_0}{P}
-  }
   \end{empheq}
   \begin{gather*}
-  \inference[\textsc{B-Loop}]{%
-  }{%
-    \hasbody{\cloop{c}}{c}
-  }
-  % \qquad
-  % \inference[\textsc{B-Skip}]{%
-  % }{%
-  %   \hasbody{\cskip}{\cskip}
-  % }
-  \qquad
-  \inference[\textsc{B-Prod}]{%
-    \hasbody{c_0}{c_0'}&
-    \hasbody{c_1}{c_1'}
-  }{%
-    \hasbody{\cprod{c_0}{c_1}}{\cprod{c_0'}{c_1'}}
-  }
-  \\
   \commute(P) := \lambda(\sigma_0 \otimes \sigma_1).~P(\sigma_1 \otimes \sigma_0)\\
   \associate(P) :=%
   \lambda((\sigma_0 \otimes \sigma_1) \otimes \sigma_2).~P(\sigma_0
@@ -144,7 +125,7 @@ TODO
 \caption{The self-relational proof system. Judgements are over
 Hoare Triples. Key rules that deviate from more traditional Hoare
 Logic systems are boxed.
-$\textsf{HasBody}$, $\textsf{commute}$, $\textsf{associate}$, and
+$\textsf{commute}$, $\textsf{associate}$, and
 $\textsf{pairwise}$ are helper definitions for the proof rules.
 Metavariables $P, Q, R\ldots$ represent program
 assertions. Other metavariables are consistent with

@@ -44,7 +44,7 @@ Notation "'ASSUME' e" := (cassume e) (at level 20, right associativity).
 Notation "c0 ';;' c1" := (cseq c0 c1) (at level 55, right associativity).
 Notation "c0 '+++' c1" := (csum c0 c1) (at level 60, right associativity).
 Notation "c0 '***' c1" := (cprod c0 c1) (at level 65, right associativity).
-Notation "'LOOP' c0" := (cloop c0) (at level 20, right associativity).
+Notation "'LOOP' '{' c0 '}'" := (cloop c0) (at level 20, right associativity).
 Notation "'SKIP'" := cskip.
 
 Inductive state :=
@@ -119,7 +119,8 @@ Definition supersedes (c0:com) (c1:com) : Prop :=
     ceval c0 st st' -> ceval c1 st st'.
 
 Definition isomorphic (c0:com) (c1:com) : Prop :=
-  supersedes c0 c1 /\ supersedes c1 c0.
+  forall st st', 
+    ceval c0 st st' <-> ceval c1 st st'.
 
 Notation "c0 '~>' c1" := (supersedes c0 c1) (at level 80, right associativity) : type_scope.
 Notation "c0 '~=' c1" := (isomorphic c0 c1) (at level 80, right associativity) : type_scope.
@@ -227,22 +228,22 @@ Proof.
 Qed.
 
 Theorem iloop : forall c c',
-  c ~= c' -> LOOP c ~= LOOP c'.
+  c ~= c' -> LOOP { c } ~= LOOP { c' }.
 Proof.
   unfold isomorphic; split; intros
-  ; [ remember (LOOP c) as loop
-    | remember (LOOP c') as loop
+  ; [ remember (LOOP { c }) as loop
+    | remember (LOOP { c' }) as loop
     ] ; induction H0; try (inversion Heqloop); subst; intuition;
     econstructor; try (eapply H); eauto.
 Qed.
 
 Theorem iloop_prod : forall c0 c1,
-  LOOP c0 *** LOOP c1 ~>
-  LOOP (c0 +++ SKIP *** c1 +++ SKIP).
+  LOOP { c0 } *** LOOP { c1 } ~>
+  LOOP { c0 +++ SKIP *** c1 +++ SKIP }.
 Proof.
   unfold supersedes; intros.
   inversion H; subst.
-  remember (LOOP c0) as loop0.
+  remember (LOOP { c0 }) as loop0.
   induction H2; try (inversion Heqloop0); clear Heqloop0; subst.
   + intuition.
     econstructor.
@@ -251,7 +252,7 @@ Proof.
       | eapply ESumRight
       ] ; eauto.
     eapply H0. eauto.
-  + remember (LOOP c1) as loop1.
+  + remember (LOOP { c1 }) as loop1.
     induction H5; try (inversion Heqloop1); clear Heqloop1; subst.
     * intuition.
       econstructor.
@@ -403,6 +404,16 @@ Proof.
     firstorder.
 Qed.
 
+Theorem hoare_seq' : forall P Q R c0 c1,
+  {{P}} c0 {{R}} ->
+  {{R}} c1 {{Q}} ->
+  {{P}} c0 ;; c1 {{Q}}.
+Proof.
+  unfold triple; intros.
+  inversion H1; subst; eauto.
+Qed.
+
+
 Theorem hoare_prod : forall (P P0 P1 Q Q0 Q1 : Assertion) c0 c1,
   (forall st0 st1, P (st0 <*> st1) -> P0 st0 /\ P1 st1) ->
   (forall st0 st1, Q0 st0 /\ Q1 st1 -> Q (st0 <*> st1)) ->
@@ -425,9 +436,58 @@ Proof. firstorder. Qed.
 
 Theorem hoare_loop : forall (P : Assertion) c,
   {{P}} c {{P}} ->
-  {{P}} LOOP c {{P}}.
+  {{P}} LOOP { c } {{P}}.
 Proof.
   unfold triple; intros.
-  remember (LOOP c) as loop.
+  remember (LOOP { c }) as loop.
   induction H0; try (inversion Heqloop); clear Heqloop; subst; intuition; eauto.
 Qed.
+
+Definition example : com :=
+  0 ::= (alit 0) ;;
+  1 ::= (alit 0) ;;
+  2 ::= (alit 0) ;;
+  3 ::= (alit 0) ;;
+  LOOP {
+    ASSUME (bop olt (avar 1) (avar 4)) ;;
+    0 ::= aop oadd (avar 0) (avar 1) ;;
+    1 ::= aop oadd (avar 1) (alit 1)
+  } ;;
+  ASSUME (bop oge (avar 1) (avar 4)) ;;
+  LOOP {
+    ASSUME (bop olt (avar 3) (avar 4)) ;;
+    2 ::= aop oadd (avar 2) (avar 3) ;;
+    3 ::= aop oadd (avar 3) (alit 1)
+  } ;;
+  ASSUME (bop oge (avar 3) (avar 4)) ;;
+  ASSUME (bnot (bop oeq (avar 0) (avar 2))).
+
+Theorem example_valid : {{fun _ => True}} example {{fun _ => False}}.
+Proof.
+  unfold example.
+  eapply hoare_seq'.
+  eapply hoare_cons.
+  Focus 3.
+  eapply hoare_assign.
+  Focus 3.
+  eapply hoare_seq'.
+  eapply hoare_cons.
+  Focus 3.
+  eapply hoare_assign.
+  Focus 3.
+  eapply hoare_seq'.
+  eapply hoare_cons.
+  Focus 3.
+  eapply hoare_assign.
+  Focus 3.
+  eapply hoare_seq'.
+  eapply hoare_cons.
+  Focus 3.
+  eapply hoare_assign.
+  Focus 3.
+  eapply hoare_seq.
+  Focus 2.
+  eapply hoare_iso.
+  eapply iprod.
+  eapply isymm.
+  eapply iskipl.

@@ -7,29 +7,12 @@
 \begin{figure}
 \begin{spreadlines}{5pt}
 \begin{gather*}
-  \inference[\textsc{E-Skip}]{%
-  }{%
-    \ceval{\cskip}{\sigma}{\sigma}
-  }
-  \qquad
-  \inference[\textsc{E-Assign}]{%
-  }{%
-    \ceval{\cassign{x}{a}}{\sigma}{\subst{x}{a}{(\sigma)}}
-  }
-  \\
   \inference[\textsc{E-Assert}]{%
     \eeval{b}{\sigma}{\btrue}
   }{%
     \ceval{\cassert{b}}{\sigma}{\sigma}
   }
   \qquad
-  \inference[\textsc{E-Sequence}]{%
-    \ceval{c_0}{\sigma_0}{\sigma_1}&
-    \ceval{c_1}{\sigma_1}{\sigma_2}&
-  }{%
-    \ceval{\cseq{c_0}{c_1}}{\sigma_0}{\sigma_2}
-  }
-  \\
   \inference[\textsc{E-SumLeft}]{%
     \ceval{c_0}{\sigma_0}{\sigma_1}
   }{%
@@ -42,9 +25,26 @@
     \ceval{\csum{c_0}{c_1}}{\sigma_0}{\sigma_1}
   }
   \\
+  \inference[\textsc{E-Assign}]{%
+  }{%
+    \ceval{\cassign{x}{a}}{\sigma}{\subst{x}{a}{(\sigma)}}
+  }
+  \qquad
+  \inference[\textsc{E-Sequence}]{%
+    \ceval{c_0}{\sigma_0}{\sigma_1}&
+    \ceval{c_1}{\sigma_1}{\sigma_2}&
+  }{%
+    \ceval{\cseq{c_0}{c_1}}{\sigma_0}{\sigma_2}
+  }
+  \\
+  \inference[\textsc{E-Skip}]{%
+  }{%
+    \ceval{\cskip}{\sigma}{\sigma}
+  }
+  \qquad
   \inference[\textsc{E-Loop}]{%
     \ceval{c}{\sigma_0}{\sigma_1}&
-    \ceval{\cloop{c}}{\sigma_1}{\sigma_2}&
+    \ceval{\cloop{c}}{\sigma_1}{\sigma_2}
   }{%
     \ceval{\cloop{c}}{\sigma_0}{\sigma_2}
   }
