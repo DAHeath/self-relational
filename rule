@@ -1,0 +1,7 @@
+-------------------
+loop (assert e ; c) HasBody (assert e ; c) + assert (not e)
+
+c0 HasBody c0'
+c1 HasBody c1'
+-------------------
+c0 * c1 HasBody c0' * c1'

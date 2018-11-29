@@ -114,10 +114,14 @@ Inductive ceval : com -> state -> state -> Prop :=
 | ESkip : forall st, ceval cskip st st.
 Hint Constructors ceval.
 
-Definition isomorphic (c0:com) (c1:com) : Prop :=
+Definition supersedes (c0:com) (c1:com) : Prop :=
   forall st st', 
-    ceval c0 st st' <-> ceval c1 st st'.
+    ceval c0 st st' -> ceval c1 st st'.
 
+Definition isomorphic (c0:com) (c1:com) : Prop :=
+  supersedes c0 c1 /\ supersedes c1 c0.
+
+Notation "c0 '~>' c1" := (supersedes c0 c1) (at level 80, right associativity) : type_scope.
 Notation "c0 '~=' c1" := (isomorphic c0 c1) (at level 80, right associativity) : type_scope.
 
 Check (forall c, c ~= c).
@@ -232,6 +236,33 @@ Proof.
     econstructor; try (eapply H); eauto.
 Qed.
 
+Theorem iloop_prod : forall c0 c1,
+  LOOP c0 *** LOOP c1 ~>
+  LOOP (c0 +++ SKIP *** c1 +++ SKIP).
+Proof.
+  unfold supersedes; intros.
+  inversion H; subst.
+  remember (LOOP c0) as loop0.
+  induction H2; try (inversion Heqloop0); clear Heqloop0; subst.
+  + intuition.
+    econstructor.
+    econstructor;
+      [ eapply ESumLeft
+      | eapply ESumRight
+      ] ; eauto.
+    eapply H0. eauto.
+  + remember (LOOP c1) as loop1.
+    induction H5; try (inversion Heqloop1); clear Heqloop1; subst.
+    * intuition.
+      econstructor.
+      econstructor;
+        [ eapply ESumRight
+        | eapply ESumLeft
+        ] ; eauto.
+      eapply H0; eauto.
+    * eauto.
+Qed.
+
 Definition Assertion := state -> Prop.
 
 Definition assn_sub x e P : Assertion :=
@@ -291,6 +322,13 @@ Proof.
              (composite (composite st1' st1'0) st2'0) H2).
     unfold associate.
     assumption.
+Qed.
+
+Theorem hoare_supersedes : forall (P Q : Assertion) c c',
+  c ~> c' -> {{P}} c' {{Q}} -> {{P}} c {{Q}}.
+Proof.
+  unfold supersedes, triple; intros.
+  eapply H0; eauto.
 Qed.
 
 Theorem hoare_iso : forall (P Q : Assertion) c c',
@@ -385,45 +423,11 @@ Theorem hoare_cons : forall (P P' Q Q' : Assertion) c,
   {{P}} c {{Q}}.
 Proof. firstorder. Qed.
 
-Inductive HasBody : com -> com -> Prop :=
-| BLoop : forall c, HasBody (LOOP c) c
-| BSkip : HasBody SKIP SKIP
-| BProd : forall c0 c0' c1 c1',
-    HasBody c0 c0' ->
-    HasBody c1 c1' ->
-    HasBody (c0 *** c1) (c0' *** c1').
-Hint Constructors HasBody.
-
-Theorem hoare_loop_2 : forall P c0 c1,
-  {{P}} c0 +++ SKIP *** c1 +++ SKIP {{P}} ->
-  {{P}} LOOP c0 *** LOOP c1 {{P}}.
+Theorem hoare_loop : forall (P : Assertion) c,
+  {{P}} c {{P}} ->
+  {{P}} LOOP c {{P}}.
 Proof.
   unfold triple; intros.
-  inversion H0; subst.
-  remember (LOOP c0) as loop0.
-  induction H4; try (inversion Heqloop0); clear Heqloop0; subst.
-  - eapply IHceval2; eauto.
-  - remember (LOOP c1) as loop1.
-    induction H7; try (inversion Heqloop1); clear Heqloop1; subst.
-    + eapply IHceval2; eauto.
-    + auto.
+  remember (LOOP c) as loop.
+  induction H0; try (inversion Heqloop); clear Heqloop; subst; intuition; eauto.
 Qed.
-
-Theorem hoare_loop : forall (P : Assertion) c c',
-  HasBody c c' ->
-  {{P}} c' {{P}} ->
-  {{P}} c {{P}}.
-Proof.
-  unfold triple; intros.
-  (* generalize dependent st. *)
-  (* generalize dependent st'. *)
-  induction c; intros; try (inversion H); subst.
-  - admit.
-  - remember (LOOP c) as loop.
-    induction H1; try (inversion Heqloop); clear Heqloop; subst.
-    + eapply IHceval2. auto.
-      eauto.
-      eapply H0; eauto.
-    + eauto.
-  - inversion H1; subst; eauto.
-Admitted.
