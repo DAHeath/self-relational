@@ -4,21 +4,85 @@
 module Self where
 
 import Control.Monad.State
+import Control.Monad.Writer hiding (Sum)
 import Control.Monad.Except
+import qualified Data.Set as S
+import           Data.Set (Set)
 
-newtype Var = Var { getVar :: String }
-  deriving (Show, Read, Eq, Ord)
+type Var = String
 
 data Expr
   = ALit Integer
   | Add Expr Expr
+  | V Var
   deriving (Show, Read, Eq, Ord)
+
+esubst :: Var -> Expr -> Expr -> Expr
+esubst x e = \case
+  ALit i -> ALit i
+  Add e0 e1 -> Add (go e0) (go e1)
+  V v -> if v == x then e else V v
+  where
+    go = esubst x e
+
+erename :: (Var -> Var) -> Expr -> Expr
+erename f = \case
+  ALit i -> ALit i
+  V v -> V (f v)
+  Add a0 a1 -> Add (erename f a0) (erename f a1)
+
+evocab :: Expr -> Set Var
+evocab = \case
+  V v -> S.singleton v
+  Add e0 e1 -> S.union (evocab e0) (evocab e1)
+  ALit{} -> S.empty
+
+type ID = Int
 
 data Prop
   = T
   | F
+  | Not Prop
   | And Prop Prop
+  | Impl Prop Prop
+  | Eql Expr Expr
+  | Rel ID [Expr]
   deriving (Show, Read, Eq, Ord)
+
+psubst :: Var -> Expr -> Prop -> Prop
+psubst x e = \case
+  T -> T
+  F -> F
+  Not p -> Not (go p)
+  And p0 p1 -> And (go p0) (go p1)
+  Impl p0 p1 -> Impl (go p0) (go p1)
+  Eql e0 e1 -> Eql (goe e0) (goe e1)
+  Rel i es -> Rel i (map goe es)
+  where
+    go = psubst x e
+    goe = esubst x e
+
+prename :: (Var -> Var) -> Prop -> Prop
+prename f= \case
+  T -> T
+  F -> F
+  Not p -> Not (go p)
+  And p0 p1 -> And (go p0) (go p1)
+  Impl p0 p1 -> Impl (go p0) (go p1)
+  Eql e0 e1 -> Eql (goe e0) (goe e1)
+  where
+    go = prename f
+    goe = erename f
+
+pvocab :: Prop -> Set Var
+pvocab = \case
+  T -> S.empty
+  F -> S.empty
+  Not p -> pvocab p
+  And p0 p1 -> S.union (pvocab p0) (pvocab p1)
+  Impl p0 p1 -> S.union (pvocab p0) (pvocab p1)
+  Eql e0 e1 -> S.union (evocab e0) (evocab e1)
+  Rel _ es -> S.unions (map evocab es)
 
 data Com
   = Assign Var Expr
@@ -30,27 +94,39 @@ data Com
   | Loop Com
   deriving (Show, Read, Eq, Ord)
 
-data St
-  = SID Int
-  | SPair St St
-  deriving (Show, Read, Eq, Ord)
-
-type ID = Int
-
 data Tree a
   = Leaf a
   | Branch (Tree a) (Tree a)
   deriving (Functor, Show, Read, Eq, Ord)
 
-type Shape = Tree ID
+zipTree :: (a -> b -> c) -> Tree a -> Tree b -> Tree c
+zipTree f (Leaf a) (Leaf b) = Leaf (f a b)
+zipTree f (Branch a b) (Branch c d) = Branch (zipTree f a c) (zipTree f b d)
 
-type Vocab = Tree [Var]
+type Vocab = Tree (Set Var)
 
-type Rename = Tree (Var -> Var)
+vocabUnion :: Vocab -> Vocab -> Vocab
+vocabUnion = zipTree S.union
+
+type VarChange = Tree (Var -> Var)
+
+mkVarChange :: Tree a -> VarChange
+mkVarChange s = evalState (go s) 0
+  where
+    go :: Tree a -> State Int VarChange
+    go = \case
+      Leaf _ -> do
+        c <- get
+        put (c+1)
+        pure $ Leaf (\n -> n ++ show c)
+      Branch s0 s1 -> Branch <$> go s0 <*> go s1
+
+instantiate :: Assertion -> Prop
+instantiate (Assertion v phi) = phi (mkVarChange v)
 
 data Assertion = Assertion
-  { shape :: Shape
-  , fact :: Rename -> Prop
+  { vocab :: Vocab
+  , fact :: VarChange -> Prop
   }
 
 commute :: Assertion -> Assertion
@@ -70,8 +146,12 @@ associate (Assertion (Branch s0 (Branch s1 s2)) phi) =
 associate _ = undefined
 
 mkAnd :: Assertion -> Assertion -> Assertion
-mkAnd (Assertion s0 phi0) (Assertion _ phi1) =
-  Assertion s0 (\r -> phi0 r `And` phi1 r)
+mkAnd (Assertion s0 phi0) (Assertion s1 phi1) =
+  Assertion (vocabUnion s0 s1) (\r -> phi0 r `And` phi1 r)
+
+mkImpl :: Assertion -> Assertion -> Assertion
+mkImpl (Assertion s0 phi0) (Assertion s1 phi1) =
+  Assertion (vocabUnion s0 s1) (\r -> phi0 r `Impl` phi1 r)
 
 pairwise :: Assertion -> Assertion -> Assertion
 pairwise (Assertion s0 phi0) (Assertion s1 phi1) =
@@ -80,21 +160,42 @@ pairwise (Assertion s0 phi0) (Assertion s1 phi1) =
               Branch r0 r1 -> And (phi0 r0) (phi1 r1)
               _ -> undefined)
 
-type M a = State Int a
+type M a = StateT Int (Writer [Prop]) a
 
-freshRel :: M Assertion
-freshRel = undefined
+freshRel :: Vocab -> M Assertion
+freshRel v = do
+  c <- get
+  put (c+1)
+  pure (Assertion v (\r -> Rel c (relVocab v r)))
+  where
+    relVocab :: Vocab -> VarChange -> [Expr]
+    relVocab v r =
+      case (v, r) of
+        (Leaf v, Leaf r) -> map (V . r) (S.toList v)
+        (Branch v0 v1, Branch r0 r1) -> relVocab v0 r0 ++ relVocab v1 r1
+        _ -> undefined
+
 
 clause :: Assertion -> Assertion -> M ()
-clause = undefined
+clause a0 a1 =
+  tell [instantiate $ mkImpl a0 a1]
 
 mkAssertion :: Prop -> Assertion
-mkAssertion = undefined
+mkAssertion p = Assertion (Leaf $ pvocab p) (\case
+  Leaf r -> prename r p
+  _ -> undefined)
 
 andE :: Assertion -> Prop -> Assertion
 andE a p = mkAnd a (mkAssertion p)
 
-subst = undefined
+subst :: Var -> Expr -> Assertion -> Assertion
+subst x e (Assertion v phi) =
+  Assertion v (\case
+    Leaf r -> psubst (r x) (erename r e) (phi (Leaf r))
+    _ -> undefined)
+
+addVar :: Var -> Assertion -> Assertion
+addVar x (Assertion (Leaf v) phi) = Assertion (Leaf (S.insert x v)) phi
 
 loopless :: Com -> Bool
 loopless = \case
@@ -120,9 +221,9 @@ dispatch :: Com -> Assertion -> M Assertion
 dispatch c q =
   case c of
     Assign x e ->
-      pure (subst x e q)
+      pure (addVar x (subst x e q))
     Assert e -> do
-      p <- freshRel
+      p <- freshRel (Leaf (pvocab e) `vocabUnion` vocab q)
       clause (andE p e) q
       pure p
     Skip -> pure q
@@ -132,20 +233,20 @@ dispatch c q =
         r <- dispatch c1 q
         dispatch c0 r
       else do
-        r <- freshRel
+        r <- freshRel (vocab q)
         p <- dispatch c0 r
         pr <- dispatch (Prod c0 c1) (pairwise r q)
         clause (pairwise p r) pr
         pure p
     Sum c0 c1 -> do
-      p <- freshRel
+      p <- freshRel (vocab q)
       p0 <- dispatch c0 q
       p1 <- dispatch c1 q
       clause p p0
       clause p p1
       pure p
     Loop c -> do
-      p <- freshRel
+      p <- freshRel (vocab q)
       r <- dispatch c p
       clause r p
       clause p q
@@ -153,9 +254,9 @@ dispatch c q =
     Prod c0 c1 ->
       if loopless c0 || loopless c1
       then do
-        p <- freshRel
-        q0 <- freshRel
-        q1 <- freshRel
+        p <- freshRel (vocab q)
+        q0 <- freshRel (vocab q)
+        q1 <- freshRel (vocab q)
         p0 <- dispatch c0 q0
         p1 <- dispatch c1 q1
         -- TODO these clauses are not precise.
@@ -169,3 +270,16 @@ dispatch c q =
           Prod c1' c1'' -> dispatch (Prod (Prod c0 c1') c1'') (associate q)
           Loop c1' -> dispatch (Prod (Loop c1') c0) (commute q)
           _ -> error ("Some impossible state has been reached: `" ++ show c ++ "`.")
+
+hoare :: Com -> [Prop]
+hoare c =
+  let (p, ps) = runWriter $ evalStateT (dispatch c (mkAssertion F)) 0
+   in instantiate p : ps
+
+example :: Com
+example =
+  Assign "x" (ALit 0) `Seq`
+  Assign "x" (Add (ALit 1) (V "x")) `Seq`
+  Assert (Not (Eql (V "x") (ALit 1)))
+
+
