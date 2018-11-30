@@ -7,3 +7,6 @@ eql.cabal
 *.aux
 *.glob
 *.vo
+dist-newstyle/
+dist/
+Setup.hs
