@@ -52,6 +52,7 @@ data Prop
   | Impl Prop Prop
   | Eql Expr Expr
   | Lt Expr Expr
+  | Ge Expr Expr
   | Rel ID [Expr]
   deriving (Show, Read, Eq, Ord)
 
@@ -64,6 +65,7 @@ psubst x e = \case
   Impl p0 p1 -> Impl (go p0) (go p1)
   Eql e0 e1 -> Eql (goe e0) (goe e1)
   Lt e0 e1 -> Lt (goe e0) (goe e1)
+  Ge e0 e1 -> Ge (goe e0) (goe e1)
   Rel i es -> Rel i (map goe es)
   where
     go = psubst x e
@@ -78,6 +80,7 @@ prename f= \case
   Impl p0 p1 -> Impl (go p0) (go p1)
   Eql e0 e1 -> Eql (goe e0) (goe e1)
   Lt e0 e1 -> Lt (goe e0) (goe e1)
+  Ge e0 e1 -> Ge (goe e0) (goe e1)
   where
     go = prename f
     goe = erename f
@@ -91,6 +94,7 @@ pvocab = \case
   Impl p0 p1 -> S.union (pvocab p0) (pvocab p1)
   Eql e0 e1 -> S.union (evocab e0) (evocab e1)
   Lt e0 e1 -> S.union (evocab e0) (evocab e1)
+  Ge e0 e1 -> S.union (evocab e0) (evocab e1)
   Rel _ es -> S.unions (map evocab es)
 
 propRels :: Prop -> Set (ID, Int)
@@ -102,6 +106,7 @@ propRels = \case
   Impl p0 p1 -> propRels p0 `S.union` propRels p1
   Eql{} -> S.empty
   Lt{} -> S.empty
+  Ge{} -> S.empty
   Rel i es -> S.singleton (i, length es)
 
 -- | The space of non-deterministic imperative commands.
@@ -134,6 +139,16 @@ type Vocab = Tree (Set Var)
 -- | Zip the vocab trees.
 vocabUnion :: Vocab -> Vocab -> Vocab
 vocabUnion = zipTree S.union
+
+cvocab :: Com -> Vocab
+cvocab = \case
+  Assign x e -> Leaf (S.insert x (evocab e))
+  Assert p -> Leaf (pvocab p)
+  Skip -> Leaf S.empty
+  Seq c0 c1 -> vocabUnion (cvocab c0) (cvocab c1)
+  Sum c0 c1 -> vocabUnion (cvocab c0) (cvocab c1)
+  Prod c0 c1 -> Branch (cvocab c0) (cvocab c1)
+  Loop c -> cvocab c
 
 -- | To implement program assertions, we need a consistent method for renaming
 -- the variables in the assertions to some concrete, distinct values.
@@ -243,7 +258,13 @@ quantify p = Forall (S.toList (pvocab p)) p
 
 clause :: Assertion -> Assertion -> M ()
 clause a0 a1 =
-  tell [quantify $ instantiate $ mkImpl a0 a1]
+  let p = instantiate $ mkImpl a0 a1
+      ps = split p
+  in tell (map quantify ps)
+   where
+     split :: Prop -> [Prop]
+     split (Impl p (And q r)) = split (Impl p q) ++ split (Impl p r)
+     split p = [p]
 
 mkAssertion :: Prop -> Assertion
 mkAssertion p = Assertion (Leaf $ pvocab p) (\case
@@ -283,7 +304,9 @@ mergeLoops = \case
   c -> c
 
 dispatch :: Com -> Assertion -> M Assertion
-dispatch c q =
+dispatch c q = do
+  traceM (showCom $ mergeLoops c)
+  traceM ""
   case mergeLoops c of
     Assign x e ->
       pure (addVar x (subst x e q))
@@ -296,43 +319,45 @@ dispatch c q =
       if loopless c0 || loopless c1
       then dispatch c0 =<< dispatch c1 q
       else do
-        r <- freshRel (vocab q)
+        r <- freshRel (cvocab c1 `vocabUnion` vocab q)
         p <- dispatch c0 r
         pr <- dispatch (Prod c0 c1) (pairwise r q)
         clause (pairwise p r) pr
         pure p
     Sum c0 c1 -> do
-      p <- freshRel (vocab q)
+      p <- freshRel (cvocab c `vocabUnion` vocab q)
       p0 <- dispatch c0 q
       p1 <- dispatch c1 q
       clause p p0
       clause p p1
       pure p
     Loop c -> do
-      p <- freshRel (vocab q)
+      p <- freshRel (cvocab c `vocabUnion` vocab q)
       r <- dispatch c p
-      clause r p
+      clause p r
       clause p q
       pure p
     Prod c0 c1 ->
       if loopless c0 || loopless c1
       then do
-        let Branch v0 v1 = vocab q
-        p <- freshRel (vocab q)
+        let Branch v0 v1 = vocab q `vocabUnion` cvocab c
+        p <- freshRel (Branch v0 v1)
         q0 <- freshRel v0
         q1 <- freshRel v1
         p0 <- dispatch c0 q0
         p1 <- dispatch c1 q1
         clause (pairwise q0 q1) q
-        clause p (pairwise p0 (Assertion (vocab p1) (\r -> T)))
-        clause p (pairwise (Assertion (vocab p0) (\r -> T)) p1)
+        clause p (pairwise p0 p1)
         pure p
       else
         case c1 of
           Sum c1' c1'' -> dispatch (Sum (Prod c0 c1') (Prod c0 c1'')) q
           Prod c1' c1'' -> associateR <$> dispatch (Prod (Prod c0 c1') c1'') (associateL q)
           Loop c1' -> commute <$> dispatch (Prod (Loop c1') c0) (commute q)
-          Seq c1' c1'' -> dispatch (Seq (Prod Skip c1') (Prod c0 c1'')) q
+          Seq c1' c1'' ->
+            if loopless c1'
+            then dispatch (Seq (Prod Skip c1') (Prod c0 c1'')) q
+            else dispatch (Seq (Prod c0 c1') (Prod Skip c1'')) q
           _ -> error ("Some impossible state has been reached: `" ++ showCom c ++ "`.")
 
 hoare :: Com -> [QProp]
@@ -357,23 +382,38 @@ example2 =
 
 example3 :: Com
 example3 =
+  Assign "s0" (ALit 0) `Seq`
+  Assign "s1" (ALit 0) `Seq`
+  Assign "i0" (ALit 0) `Seq`
+  Assign "i1" (ALit 0) `Seq`
+  Loop (
+    Assert (Lt (V "i0") (V "n")) `Seq`
+    Assign "s0" (Add (V "s0") (V "i0")) `Seq`
+    Assign "i0" (Add (V "i0") (ALit 1))
+  ) `Seq`
+  Assert (Ge (V "i0") (V "n")) `Seq`
+  Loop (
+    Assert (Lt (V "i1") (V "n")) `Seq`
+    Assign "s1" (Add (V "s1") (V "i1")) `Seq`
+    Assign "i1" (Add (V "i1") (ALit 1))
+  ) `Seq`
+  Assert (Ge (V "i1") (V "n")) `Seq`
+  Assert (Not (
+    Impl
+      (Eql (V "i0") (V "i1"))
+      (Eql (V "s0") (V "s1"))))
+
+example4 :: Com
+example4 =
   Assign "a" (ALit 0) `Seq`
   Assign "b" (ALit 0) `Seq`
-  Assign "c" (ALit 0) `Seq`
-  Assign "d" (ALit 0) `Seq`
   Loop (
     Assert (Lt (V "b") (V "n")) `Seq`
-    Assign "a" (Add (V "a") (V "b")) `Seq`
-    Assign "b" (Add (V "b") (ALit 1))
+    Assign "b" (Add (V "b") (ALit 1)) `Seq`
+    Assign "a" (Add (V "a") (V "b"))
   ) `Seq`
   Assert (Not (Lt (V "b") (V "n"))) `Seq`
-  Loop (
-    Assert (Lt (V "d") (V "n")) `Seq`
-    Assign "c" (Add (V "c") (V "d")) `Seq`
-    Assign "d" (Add (V "d") (ALit 1))
-  ) `Seq`
-  Assert (Not (Lt (V "d") (V "n"))) `Seq`
-  Assert (Not (Eql (V "a") (V "c")))
+  Assert (Not (Ge (V "a") (V "n")))
 
 showCom :: Com -> String
 showCom = \case
@@ -384,25 +424,6 @@ showCom = \case
   Sum c0 c1 -> "{" ++ showCom c0 ++ "} +\n {" ++ showCom c1 ++ "}"
   Prod c0 c1 -> "{" ++ showCom c0 ++ "} *\n {" ++ showCom c1 ++ "}"
   Loop c -> "LOOP {\n" ++ showCom c ++ "}"
-
---   0 ::= (alit 0) ;;
---   1 ::= (alit 0) ;;
---   2 ::= (alit 0) ;;
---   3 ::= (alit 0) ;;
---   LOOP {
---     ASSUME (bop olt (avar 1) (avar 4)) ;;
---     0 ::= aop oadd (avar 0) (avar 1) ;;
---     1 ::= aop oadd (avar 1) (alit 1)
---   } ;;
---   ASSUME (bop oge (avar 1) (avar 4)) ;;
---   LOOP {
---     ASSUME (bop olt (avar 3) (avar 4)) ;;
---     2 ::= aop oadd (avar 2) (avar 3) ;;
---     3 ::= aop oadd (avar 3) (alit 1)
---   } ;;
---   ASSUME (bop oge (avar 3) (avar 4)) ;;
---   ASSUME (bnot (bop oeq (avar 0) (avar 2))).
-
 
 sexpr :: [String] -> String
 sexpr ss = "(" ++ unwords ss ++ ")"
@@ -422,11 +443,11 @@ smt2 c = unlines [header, decls, body, footer]
     qrels (Forall _ p) = propRels p
 
 smt2QProp :: QProp -> String
-smt2QProp (Forall vs p) = sexpr ["assert", body]
+smt2QProp (Forall vs p) = sexpr ["assert", body] ++ "\n"
   where
     body = case vs of
              [] -> smt2Prop p
-             _ -> sexpr ["forall", sexpr $ map var vs, smt2Prop p]
+             _ -> sexpr ["forall", (sexpr $ map var vs) ++ "\n", "  " ++ smt2Prop p]
     var v = sexpr [v, "Int"]
 
 smt2Expr :: Expr -> String
@@ -444,4 +465,5 @@ smt2Prop = \case
   Impl p0 p1 -> sexpr ["=>", smt2Prop p0, smt2Prop p1]
   Eql e0 e1 -> sexpr ["=", smt2Expr e0, smt2Expr e1]
   Lt e0 e1 -> sexpr ["<", smt2Expr e0, smt2Expr e1]
+  Ge e0 e1 -> sexpr [">=", smt2Expr e0, smt2Expr e1]
   Rel i es -> sexpr (("R" ++ show i) : map smt2Expr es)
