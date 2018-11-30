@@ -9,6 +9,9 @@ import Control.Monad.Except
 import qualified Data.Set as S
 import           Data.Set (Set)
 
+
+import Debug.Trace
+
 type Var = String
 
 -- | The space of arithmetic expressions.
@@ -149,7 +152,7 @@ mkVarChange s = evalState (go s) 0
       Leaf _ -> do
         c <- get
         put (c+1)
-        pure $ Leaf (\n -> n ++ show c)
+        pure $ Leaf (\n -> n ++ "_" ++ show c)
       Branch s0 s1 -> Branch <$> go s0 <*> go s1
 
 -- | An assertion can be thought of as a smart constructor for a Proposition.
@@ -179,17 +182,32 @@ commute _ = undefined
 
 -- | Associate the assertion: That is, rotate how the assertion is applied to the
 -- VarChange.
-associate :: Assertion -> Assertion
-associate (Assertion (Branch s0 (Branch s1 s2)) phi) =
+associateL :: Assertion -> Assertion
+associateL (Assertion (Branch s0 (Branch s1 s2)) phi) =
   Assertion (Branch (Branch s0 s1) s2)
             (\case
-                Branch r0 (Branch r1 r2) -> phi (Branch r0 (Branch r1 r2))
+                Branch (Branch r0 r1) r2 -> phi (Branch r0 (Branch r1 r2))
                 _ -> undefined)
-associate _ = undefined
+associateL _ = undefined
+
+associateR :: Assertion -> Assertion
+associateR (Assertion (Branch (Branch s0 s1) s2) phi) =
+  Assertion (Branch s0 (Branch s1 s2))
+            (\case
+                Branch r0 (Branch r1 r2) -> phi (Branch (Branch r0 r1) r2)
+                _ -> undefined)
+associateR _ = undefined
+
+pand :: Prop -> Prop -> Prop
+pand T p = p
+pand p T = p
+pand F _ = F
+pand _ F = F
+pand p q = p `And` q
 
 mkAnd :: Assertion -> Assertion -> Assertion
 mkAnd (Assertion s0 phi0) (Assertion s1 phi1) =
-  Assertion (vocabUnion s0 s1) (\r -> phi0 r `And` phi1 r)
+  Assertion (vocabUnion s0 s1) (\r -> phi0 r `pand` phi1 r)
 
 mkImpl :: Assertion -> Assertion -> Assertion
 mkImpl (Assertion s0 phi0) (Assertion s1 phi1) =
@@ -199,7 +217,7 @@ pairwise :: Assertion -> Assertion -> Assertion
 pairwise (Assertion s0 phi0) (Assertion s1 phi1) =
   Assertion (Branch s0 s1)
             (\case
-              Branch r0 r1 -> And (phi0 r0) (phi1 r1)
+              Branch r0 r1 -> pand (phi0 r0) (phi1 r1)
               _ -> undefined)
 
 type M a = StateT Int (Writer [QProp]) a
@@ -266,7 +284,7 @@ mergeLoops = \case
 
 dispatch :: Com -> Assertion -> M Assertion
 dispatch c q =
-  case c of
+  case mergeLoops c of
     Assign x e ->
       pure (addVar x (subst x e q))
     Assert e -> do
@@ -276,9 +294,7 @@ dispatch c q =
     Skip -> pure q
     Seq c0 c1 ->
       if loopless c0 || loopless c1
-      then do
-        r <- dispatch c1 q
-        dispatch c0 r
+      then dispatch c0 =<< dispatch c1 q
       else do
         r <- freshRel (vocab q)
         p <- dispatch c0 r
@@ -301,22 +317,23 @@ dispatch c q =
     Prod c0 c1 ->
       if loopless c0 || loopless c1
       then do
+        let Branch v0 v1 = vocab q
         p <- freshRel (vocab q)
-        q0 <- freshRel (vocab q)
-        q1 <- freshRel (vocab q)
+        q0 <- freshRel v0
+        q1 <- freshRel v1
         p0 <- dispatch c0 q0
         p1 <- dispatch c1 q1
-        -- TODO these clauses are not precise.
-        clause (mkAnd q0 q1) q
-        clause p p0
-        clause p p1
+        clause (pairwise q0 q1) q
+        clause p (pairwise p0 (Assertion (vocab p1) (\r -> T)))
+        clause p (pairwise (Assertion (vocab p0) (\r -> T)) p1)
         pure p
       else
-        case mergeLoops c1 of
+        case c1 of
           Sum c1' c1'' -> dispatch (Sum (Prod c0 c1') (Prod c0 c1'')) q
-          Prod c1' c1'' -> dispatch (Prod (Prod c0 c1') c1'') (associate q)
-          Loop c1' -> dispatch (Prod (Loop c1') c0) (commute q)
-          _ -> error ("Some impossible state has been reached: `" ++ show c ++ "`.")
+          Prod c1' c1'' -> associateR <$> dispatch (Prod (Prod c0 c1') c1'') (associateL q)
+          Loop c1' -> commute <$> dispatch (Prod (Loop c1') c0) (commute q)
+          Seq c1' c1'' -> dispatch (Seq (Prod Skip c1') (Prod c0 c1'')) q
+          _ -> error ("Some impossible state has been reached: `" ++ showCom c ++ "`.")
 
 hoare :: Com -> [QProp]
 hoare c =
@@ -336,6 +353,56 @@ example2 =
     (Assign "x" (ALit 1))
   `Seq`
   Assert (Lt (V "x") (ALit 0))
+
+
+example3 :: Com
+example3 =
+  Assign "a" (ALit 0) `Seq`
+  Assign "b" (ALit 0) `Seq`
+  Assign "c" (ALit 0) `Seq`
+  Assign "d" (ALit 0) `Seq`
+  Loop (
+    Assert (Lt (V "b") (V "n")) `Seq`
+    Assign "a" (Add (V "a") (V "b")) `Seq`
+    Assign "b" (Add (V "b") (ALit 1))
+  ) `Seq`
+  Assert (Not (Lt (V "b") (V "n"))) `Seq`
+  Loop (
+    Assert (Lt (V "d") (V "n")) `Seq`
+    Assign "c" (Add (V "c") (V "d")) `Seq`
+    Assign "d" (Add (V "d") (ALit 1))
+  ) `Seq`
+  Assert (Not (Lt (V "d") (V "n"))) `Seq`
+  Assert (Not (Eql (V "a") (V "c")))
+
+showCom :: Com -> String
+showCom = \case
+  Skip -> "skip"
+  Assign v e -> v ++ " := " ++ smt2Expr e
+  Assert e -> "assert " ++ smt2Prop e
+  Seq c0 c1 -> showCom c0 ++ ";\n" ++ showCom c1
+  Sum c0 c1 -> "{" ++ showCom c0 ++ "} +\n {" ++ showCom c1 ++ "}"
+  Prod c0 c1 -> "{" ++ showCom c0 ++ "} *\n {" ++ showCom c1 ++ "}"
+  Loop c -> "LOOP {\n" ++ showCom c ++ "}"
+
+--   0 ::= (alit 0) ;;
+--   1 ::= (alit 0) ;;
+--   2 ::= (alit 0) ;;
+--   3 ::= (alit 0) ;;
+--   LOOP {
+--     ASSUME (bop olt (avar 1) (avar 4)) ;;
+--     0 ::= aop oadd (avar 0) (avar 1) ;;
+--     1 ::= aop oadd (avar 1) (alit 1)
+--   } ;;
+--   ASSUME (bop oge (avar 1) (avar 4)) ;;
+--   LOOP {
+--     ASSUME (bop olt (avar 3) (avar 4)) ;;
+--     2 ::= aop oadd (avar 2) (avar 3) ;;
+--     3 ::= aop oadd (avar 3) (alit 1)
+--   } ;;
+--   ASSUME (bop oge (avar 3) (avar 4)) ;;
+--   ASSUME (bnot (bop oeq (avar 0) (avar 2))).
+
 
 sexpr :: [String] -> String
 sexpr ss = "(" ++ unwords ss ++ ")"
