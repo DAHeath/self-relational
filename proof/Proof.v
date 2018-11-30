@@ -340,23 +340,6 @@ Proof.
   eapply H; eauto.
 Qed.
 
-Definition left (P : Assertion) : Assertion := fun st =>
-  match st with
-  | st0 <*> st1 => P st0
-  | _ => False
-  end.
-
-Theorem hoare_skip_intro : forall (P Q : Assertion) c,
-  {{left P}} c *** SKIP {{left Q}} ->
-  {{P}} c {{Q}}.
-Proof.
-  unfold triple; intros.
-  assert (left Q (st' <*> singleton (fun _ => 0))). eapply H.
-  econstructor; eauto.
-  simpl; eauto.
-  eauto.
-Qed.
-
 Theorem hoare_assign : forall P x e,
   {{assn_sub x e P}} x ::= e {{P}}.
 Proof.
@@ -413,8 +396,7 @@ Proof.
   inversion H1; subst; eauto.
 Qed.
 
-
-Theorem hoare_prod : forall (P P0 P1 Q Q0 Q1 : Assertion) c0 c1,
+Theorem hoare_split : forall (P P0 P1 Q Q0 Q1 : Assertion) c0 c1,
   (forall st0 st1, P (st0 <*> st1) -> P0 st0 /\ P1 st1) ->
   (forall st0 st1, Q0 st0 /\ Q1 st1 -> Q (st0 <*> st1)) ->
   {{P0}} c0 {{Q0}} ->
@@ -425,6 +407,22 @@ Proof.
   inversion H3; subst.
   eapply H0.
   firstorder.
+Qed.
+
+Definition left (P:Assertion) st0 : Assertion :=
+  fun st1 => P (st0 <*> st1).
+
+Definition right (P:Assertion) st1 : Assertion :=
+  fun st0 => P (st0 <*> st1).
+
+Theorem hoare_prod : forall (P Q R : Assertion) c0 c1,
+  (forall st1, {{right P st1}} c0 {{right R st1}}) ->
+  (forall st0, {{left R st0}} c1 {{left Q st0}}) ->
+  {{P}} c0 *** c1 {{Q}}.
+Proof.
+  unfold triple, left, right; intros.
+  inversion H1; subst.
+  eauto.
 Qed.
 
 Theorem hoare_cons : forall (P P' Q Q' : Assertion) c,

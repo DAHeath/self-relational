@@ -91,8 +91,8 @@ TODO
   }
   \\
   \inference[\textsc{Prod}]{%
-    \hoare{\aleft(P)}{c_0}{\aleft(R)}\\
-    \hoare{\aright(R)}{c_1}{\aright(Q)}
+    \forall \sigma_1.\hoare{\aright(P, \sigma_1)}{c_0}{\aright(R, \sigma_1)}\\
+    \forall \sigma_0.\hoare{\aleft(R, \sigma_0)}{c_1}{\aleft(Q, \sigma_0)}
   }{%
     \hoare{P}{c_0 \times c_1}{Q}
   }
@@ -119,9 +119,9 @@ TODO
   }
   \end{empheq}
   \begin{gather*}
-  \aleft(P) := \lambda\sigma_0.~\forall \sigma_1.~P(\sigma_0 \otimes \sigma_1)
+  \aleft(P, \sigma_0) := \lambda\sigma_1.~P(\sigma_0 \otimes \sigma_1)
   \qquad
-  \aright(P) := \lambda\sigma_1.~\forall \sigma_0.~P(\sigma_0 \otimes \sigma_1)
+  \aright(P, \sigma_1) := \lambda\sigma_0.~P(\sigma_0 \otimes \sigma_1)
   \\
   \commute(P) := \lambda(\sigma_0 \otimes \sigma_1).~P(\sigma_1 \otimes \sigma_0)
   \qquad
