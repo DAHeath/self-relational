@@ -91,6 +91,13 @@ TODO
   }
   \\
   \inference[\textsc{Prod}]{%
+    \hoare{\aleft(P)}{c_0}{\aleft(R)}\\
+    \hoare{\aright(R)}{c_1}{\aright(Q)}
+  }{%
+    \hoare{P}{c_0 \times c_1}{Q}
+  }
+  \qquad
+  \inference[\textsc{Split}]{%
     \hoare{P_0}{c_0}{Q_0}&
     P\, \Rightarrow \pairwise(P_{\,0}, P_{\,1})\\
     \hoare{P_1}{c_1}{Q_1}&
@@ -112,7 +119,12 @@ TODO
   }
   \end{empheq}
   \begin{gather*}
-  \commute(P) := \lambda(\sigma_0 \otimes \sigma_1).~P(\sigma_1 \otimes \sigma_0)\\
+  \aleft(P) := \lambda\sigma_0.~\forall \sigma_1.~P(\sigma_0 \otimes \sigma_1)
+  \qquad
+  \aright(P) := \lambda\sigma_1.~\forall \sigma_0.~P(\sigma_0 \otimes \sigma_1)
+  \\
+  \commute(P) := \lambda(\sigma_0 \otimes \sigma_1).~P(\sigma_1 \otimes \sigma_0)
+  \qquad
   \associate(P) :=%
   \lambda((\sigma_0 \otimes \sigma_1) \otimes \sigma_2).~P(\sigma_0
   \otimes (\sigma_1 \otimes \sigma_2))\\
@@ -135,24 +147,6 @@ assertions. Other metavariables are consistent with
 \begin{figure}
 \begin{spreadlines}{5pt}
 \begin{gather*}
-  % \inference[\textsc{I-Refl}]{%
-  % }{%
-  %   c \cong c
-  % }
-  % \qquad
-  % \inference[\textsc{I-Symm}]{%
-  %   c_1 \cong c_0
-  % }{%
-  %   c_0 \cong c_1
-  % }
-  % \qquad
-  % \inference[\textsc{I-Trans}]{%
-  %   c_0 \cong c_1&
-  %   c_1 \cong c_2
-  % }{%
-  %   c_0 \cong c_2
-  % }
-  % \\
   \inference[$\textsc{I-Skip}_L$]{%
   }{%
     \cseq{\cskip}{c} \cong c
@@ -162,16 +156,6 @@ assertions. Other metavariables are consistent with
   }{%
     \cseq{c}{\cskip} \cong c
   }
-  % \qquad
-  % \inference[\textsc{I-SeqAssoc}]{%
-  % }{%
-  %   \cseq{c_0}{(\cseq{c_1}{c_2})} \cong \cseq{(\cseq{c_0}{c_1})}{c_2}
-  % }
-  % \\
-  % \inference[\textsc{I-SkipProd}]{%
-  % }{%
-  %   \cprod{\cskip}{\cskip} \cong \cskip
-  % }
   \\
   \inference[\textsc{I-SeqProd}]{%
   }{%
@@ -183,34 +167,6 @@ assertions. Other metavariables are consistent with
   }{%
     \cloop{c} \cong \cloop{\cseq{c}{(\csum{c}{\cskip})}}
   }
-  % \qquad
-  % \inference[\textsc{I-Loop}]{%
-  %   c \cong c'
-  % }{%
-  %   \cloop{c} \cong \cloop{c'}
-  % }
-  \\
-  % \inference[\textsc{I-Seq}]{%
-  %   c_0 \cong c_0'&
-  %   c_1 \cong c_1'
-  % }{%
-  %   \cseq{c_0}{c_1} \cong \cseq{c_0'}{c_1'}
-  % }
-  % \qquad
-  % \inference[\textsc{I-Prod}]{%
-  %   c_0 \cong c_0'&
-  %   c_1 \cong c_1'
-  % }{%
-  %   \cprod{c_0}{c_1} \cong \cprod{c_0'}{c_1'}
-  % }
-  % \qquad
-  % \inference[\textsc{I-Sum}]{%
-  %   c_0 \cong c_0'&
-  %   c_1 \cong c_1'
-  % }{%
-  %   \csum{c_0}{c_1} \cong \csum{c_0'}{c_1'}
-  % }
-  % \\
   \inference[\textsc{I-SumProd}]{%
   }{%
     \cprod{(\csum{c_0}{c_1})}{c_2} \cong
