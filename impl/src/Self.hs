@@ -11,6 +11,7 @@ import           Data.Set (Set)
 
 type Var = String
 
+-- | The space of arithmetic expressions.
 data Expr
   = ALit Integer
   | Add Expr Expr
@@ -39,6 +40,7 @@ evocab = \case
 
 type ID = Int
 
+-- | The space of (quantifier-free) logical propositions.
 data Prop
   = T
   | F
@@ -46,6 +48,7 @@ data Prop
   | And Prop Prop
   | Impl Prop Prop
   | Eql Expr Expr
+  | Lt Expr Expr
   | Rel ID [Expr]
   deriving (Show, Read, Eq, Ord)
 
@@ -57,6 +60,7 @@ psubst x e = \case
   And p0 p1 -> And (go p0) (go p1)
   Impl p0 p1 -> Impl (go p0) (go p1)
   Eql e0 e1 -> Eql (goe e0) (goe e1)
+  Lt e0 e1 -> Lt (goe e0) (goe e1)
   Rel i es -> Rel i (map goe es)
   where
     go = psubst x e
@@ -70,6 +74,7 @@ prename f= \case
   And p0 p1 -> And (go p0) (go p1)
   Impl p0 p1 -> Impl (go p0) (go p1)
   Eql e0 e1 -> Eql (goe e0) (goe e1)
+  Lt e0 e1 -> Lt (goe e0) (goe e1)
   where
     go = prename f
     goe = erename f
@@ -82,8 +87,21 @@ pvocab = \case
   And p0 p1 -> S.union (pvocab p0) (pvocab p1)
   Impl p0 p1 -> S.union (pvocab p0) (pvocab p1)
   Eql e0 e1 -> S.union (evocab e0) (evocab e1)
+  Lt e0 e1 -> S.union (evocab e0) (evocab e1)
   Rel _ es -> S.unions (map evocab es)
 
+propRels :: Prop -> Set (ID, Int)
+propRels = \case
+  T -> S.empty
+  F -> S.empty
+  Not p -> propRels p
+  And p0 p1 -> propRels p0 `S.union` propRels p1
+  Impl p0 p1 -> propRels p0 `S.union` propRels p1
+  Eql{} -> S.empty
+  Lt{} -> S.empty
+  Rel i es -> S.singleton (i, length es)
+
+-- | The space of non-deterministic imperative commands.
 data Com
   = Assign Var Expr
   | Assert Prop
@@ -94,22 +112,35 @@ data Com
   | Loop Com
   deriving (Show, Read, Eq, Ord)
 
+-- | A simple binary tree.
 data Tree a
   = Leaf a
   | Branch (Tree a) (Tree a)
   deriving (Functor, Show, Read, Eq, Ord)
 
+-- | Zip two trees with the same shape.
 zipTree :: (a -> b -> c) -> Tree a -> Tree b -> Tree c
 zipTree f (Leaf a) (Leaf b) = Leaf (f a b)
 zipTree f (Branch a b) (Branch c d) = Branch (zipTree f a c) (zipTree f b d)
 
+-- | A `vocabulary' consists of a tree where each leaf is a set of variables.
+-- Once instantiated, the different leaves will be renamed with different
+-- indices.
 type Vocab = Tree (Set Var)
 
+-- | Zip the vocab trees.
 vocabUnion :: Vocab -> Vocab -> Vocab
 vocabUnion = zipTree S.union
 
+-- | To implement program assertions, we need a consistent method for renaming
+-- the variables in the assertions to some concrete, distinct values.
+-- A VarChange is a tree which can apply different variable transformations to
+-- different parts of assertions.
 type VarChange = Tree (Var -> Var)
 
+-- | Given some tree shape, builds a VarChange which renames variables by
+-- adding an index based on the position in the tree where the variable
+-- appears.
 mkVarChange :: Tree a -> VarChange
 mkVarChange s = evalState (go s) 0
   where
@@ -121,14 +152,23 @@ mkVarChange s = evalState (go s) 0
         pure $ Leaf (\n -> n ++ show c)
       Branch s0 s1 -> Branch <$> go s0 <*> go s1
 
-instantiate :: Assertion -> Prop
-instantiate (Assertion v phi) = phi (mkVarChange v)
-
+-- | An assertion can be thought of as a smart constructor for a Proposition.
+-- The key difference is that an assertion can be over multiple program states
+-- simultaneously. To distinguish the different program states, we use a
+-- VarChange to rename the various variables appropriately.
+-- In addition, an assertion carries a Vocabulary with live variables.
 data Assertion = Assertion
   { vocab :: Vocab
   , fact :: VarChange -> Prop
   }
 
+-- | Instiate the assertion by applying a VarChange based on the assertion
+-- vocabulary.
+instantiate :: Assertion -> Prop
+instantiate (Assertion v phi) = phi (mkVarChange v)
+
+-- | Commute the assertion: That is, swap how the assertion is applied to the
+-- VarChange.
 commute :: Assertion -> Assertion
 commute (Assertion (Branch s0 s1) phi) =
   Assertion (Branch s1 s0)
@@ -137,6 +177,8 @@ commute (Assertion (Branch s0 s1) phi) =
                 _ -> undefined)
 commute _ = undefined
 
+-- | Associate the assertion: That is, rotate how the assertion is applied to the
+-- VarChange.
 associate :: Assertion -> Assertion
 associate (Assertion (Branch s0 (Branch s1 s2)) phi) =
   Assertion (Branch (Branch s0 s1) s2)
@@ -160,7 +202,7 @@ pairwise (Assertion s0 phi0) (Assertion s1 phi1) =
               Branch r0 r1 -> And (phi0 r0) (phi1 r1)
               _ -> undefined)
 
-type M a = StateT Int (Writer [Prop]) a
+type M a = StateT Int (Writer [QProp]) a
 
 freshRel :: Vocab -> M Assertion
 freshRel v = do
@@ -175,10 +217,15 @@ freshRel v = do
         (Branch v0 v1, Branch r0 r1) -> relVocab v0 r0 ++ relVocab v1 r1
         _ -> undefined
 
+data QProp = Forall [Var] Prop
+  deriving (Show, Read, Eq, Ord)
+
+quantify :: Prop -> QProp
+quantify p = Forall (S.toList (pvocab p)) p
 
 clause :: Assertion -> Assertion -> M ()
 clause a0 a1 =
-  tell [instantiate $ mkImpl a0 a1]
+  tell [quantify $ instantiate $ mkImpl a0 a1]
 
 mkAssertion :: Prop -> Assertion
 mkAssertion p = Assertion (Leaf $ pvocab p) (\case
@@ -271,10 +318,10 @@ dispatch c q =
           Loop c1' -> dispatch (Prod (Loop c1') c0) (commute q)
           _ -> error ("Some impossible state has been reached: `" ++ show c ++ "`.")
 
-hoare :: Com -> [Prop]
+hoare :: Com -> [QProp]
 hoare c =
   let (p, ps) = runWriter $ evalStateT (dispatch c (mkAssertion F)) 0
-   in instantiate p : ps
+   in quantify (instantiate p) : (reverse ps)
 
 example :: Com
 example =
@@ -282,4 +329,52 @@ example =
   Assign "x" (Add (ALit 1) (V "x")) `Seq`
   Assert (Not (Eql (V "x") (ALit 1)))
 
+example2 :: Com
+example2 =
+  Sum
+    (Assign "x" (ALit 0))
+    (Assign "x" (ALit 1))
+  `Seq`
+  Assert (Lt (V "x") (ALit 0))
 
+sexpr :: [String] -> String
+sexpr ss = "(" ++ unwords ss ++ ")"
+
+smt2 :: Com -> String
+smt2 c = unlines [header, decls, body, footer]
+  where
+    header = unlines [ sexpr ["set-logic", "HORN"]
+                     , sexpr ["set-option", ":fixedpoint.engine", "\"duality\""]
+                     ]
+    footer = unlines [ sexpr ["check-sat"], sexpr ["get-model"] ]
+    decl (i, n) = sexpr ["declare-fun", "R" ++ show i, sexpr (replicate n "Int"), "Bool"]
+    decls = unlines $ map decl (S.toList rels)
+    body = unlines (map smt2QProp qs)
+    qs = hoare c
+    rels = S.unions (map qrels qs)
+    qrels (Forall _ p) = propRels p
+
+smt2QProp :: QProp -> String
+smt2QProp (Forall vs p) = sexpr ["assert", body]
+  where
+    body = case vs of
+             [] -> smt2Prop p
+             _ -> sexpr ["forall", sexpr $ map var vs, smt2Prop p]
+    var v = sexpr [v, "Int"]
+
+smt2Expr :: Expr -> String
+smt2Expr = \case
+  ALit i -> show i
+  Add a0 a1 -> sexpr ["+", smt2Expr a0, smt2Expr a1]
+  V v -> v
+
+smt2Prop :: Prop -> String
+smt2Prop = \case
+  T -> "true"
+  F -> "false"
+  Not p -> sexpr ["not", smt2Prop p]
+  And p0 p1 -> sexpr ["and", smt2Prop p0, smt2Prop p1]
+  Impl p0 p1 -> sexpr ["=>", smt2Prop p0, smt2Prop p1]
+  Eql e0 e1 -> sexpr ["=", smt2Expr e0, smt2Expr e1]
+  Lt e0 e1 -> sexpr ["<", smt2Expr e0, smt2Expr e1]
+  Rel i es -> sexpr (("R" ++ show i) : map smt2Expr es)
