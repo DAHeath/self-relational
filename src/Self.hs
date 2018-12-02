@@ -126,6 +126,18 @@ data Tree a
   | Branch (Tree a) (Tree a)
   deriving (Functor, Show, Read, Eq, Ord)
 
+data CtxtNode a
+  = L (Tree a)
+  | R (Tree a)
+  deriving (Functor, Show, Read, Eq, Ord)
+
+type Ctxt a = [CtxtNode a]
+
+contextualize :: Ctxt a -> Tree a -> Tree a
+contextualize [] t = t
+contextualize (L x:ctx) t = Branch x (contextualize ctx t)
+contextualize (R x:ctx) t = Branch (contextualize ctx t) x
+
 -- | Zip two trees with the same shape.
 zipTree :: (a -> b -> c) -> Tree a -> Tree b -> Tree c
 zipTree f (Leaf a) (Leaf b) = Leaf (f a b)
@@ -135,6 +147,7 @@ zipTree f (Branch a b) (Branch c d) = Branch (zipTree f a c) (zipTree f b d)
 -- Once instantiated, the different leaves will be renamed with different
 -- indices.
 type Vocab = Tree (Set Var)
+type VocabCtxt = Ctxt (Set Var)
 
 -- | Zip the vocab trees.
 vocabUnion :: Vocab -> Vocab -> Vocab
@@ -155,62 +168,72 @@ cvocab = \case
 -- A VarChange is a tree which can apply different variable transformations to
 -- different parts of assertions.
 type VarChange = Tree (Var -> Var)
+type VarChangeCtxt = Ctxt (Var -> Var)
 
 -- | Given some tree shape, builds a VarChange which renames variables by
 -- adding an index based on the position in the tree where the variable
 -- appears.
-mkVarChange :: Tree a -> VarChange
-mkVarChange s = evalState (go s) 0
+mkVarChange :: (Tree a, Ctxt a) -> (VarChange, VarChangeCtxt)
+mkVarChange (t, c) = evalState ((,) <$> tree t <*> ctxt c) 0
   where
-    go :: Tree a -> State Int VarChange
-    go = \case
+    ctxt = \case
+      [] -> pure []
+      (L x:cs) -> (:) <$> (L <$> tree x) <*> ctxt cs
+      (R x:cs) -> (:) <$> (R <$> tree x) <*> ctxt cs
+
+    tree :: Tree a -> State Int VarChange
+    tree = \case
       Leaf _ -> do
         c <- get
         put (c+1)
         pure $ Leaf (\n -> n ++ "_" ++ show c)
-      Branch s0 s1 -> Branch <$> go s0 <*> go s1
+      Branch s0 s1 -> Branch <$> tree s0 <*> tree s1
 
 -- | An assertion can be thought of as a smart constructor for a Proposition.
 -- The key difference is that an assertion can be over multiple program states
 -- simultaneously. To distinguish the different program states, we use a
 -- VarChange to rename the various variables appropriately.
 -- In addition, an assertion carries a Vocabulary with live variables.
+
+type Fact = VarChangeCtxt -> VarChange -> Prop
+
 data Assertion = Assertion
-  { vocab :: Vocab
-  , fact :: VarChange -> Prop
+  { ctxt :: VocabCtxt
+  , vocab :: Vocab
+  , fact :: Fact
   }
 
 -- | Instiate the assertion by applying a VarChange based on the assertion
 -- vocabulary.
 instantiate :: Assertion -> Prop
-instantiate (Assertion v phi) = phi (mkVarChange v)
+instantiate (Assertion ctx v phi) = uncurry (flip phi) (mkVarChange (v, ctx))
 
 -- | Commute the assertion: That is, swap how the assertion is applied to the
 -- VarChange.
 commute :: Assertion -> Assertion
-commute (Assertion (Branch s0 s1) phi) =
-  Assertion (Branch s1 s0)
-            (\case
-                Branch r0 r1 -> phi (Branch r1 r0)
+commute (Assertion ctx (Branch s0 s1) phi) =
+  Assertion ctx (Branch s1 s0)
+            (\vctx r -> case r of
+                Branch r0 r1 -> phi vctx (Branch r1 r0)
                 _ -> undefined)
 commute _ = undefined
 
 -- | Associate the assertion: That is, rotate how the assertion is applied to the
 -- VarChange.
 associateL :: Assertion -> Assertion
-associateL (Assertion (Branch s0 (Branch s1 s2)) phi) =
-  Assertion (Branch (Branch s0 s1) s2)
-            (\case
-                Branch (Branch r0 r1) r2 -> phi (Branch r0 (Branch r1 r2))
+associateL (Assertion ctx (Branch s0 (Branch s1 s2)) phi) =
+  Assertion ctx (Branch (Branch s0 s1) s2)
+            (\vctx r -> case r of
+                Branch (Branch r0 r1) r2 -> phi vctx (Branch r0 (Branch r1 r2))
                 _ -> undefined)
 associateL _ = undefined
 
 associateR :: Assertion -> Assertion
-associateR (Assertion (Branch (Branch s0 s1) s2) phi) =
-  Assertion (Branch s0 (Branch s1 s2))
-            (\case
-                Branch r0 (Branch r1 r2) -> phi (Branch (Branch r0 r1) r2)
-                _ -> undefined)
+associateR (Assertion ctx ((Branch (Branch s0 s1) s2)) phi) =
+  Assertion ctx (Branch s0 (Branch s1 s2))
+            (\vctx r -> case r of
+               Branch r0 (Branch r1 r2) -> phi vctx (Branch (Branch r0 r1) r2)
+               _ -> undefined)
 associateR _ = undefined
 
 pand :: Prop -> Prop -> Prop
@@ -220,28 +243,59 @@ pand F _ = F
 pand _ F = F
 pand p q = p `And` q
 
-mkAnd :: Assertion -> Assertion -> Assertion
-mkAnd (Assertion s0 phi0) (Assertion s1 phi1) =
-  Assertion (vocabUnion s0 s1) (\r -> phi0 r `pand` phi1 r)
-
 mkImpl :: Assertion -> Assertion -> Assertion
-mkImpl (Assertion s0 phi0) (Assertion s1 phi1) =
-  Assertion (vocabUnion s0 s1) (\r -> phi0 r `Impl` phi1 r)
+mkImpl (Assertion ctx0 s0 phi0) (Assertion _ s1 phi1) =
+  Assertion ctx0 (vocabUnion s0 s1) (\vctx r -> phi0 vctx r `Impl` phi1 vctx r)
 
 pairwise :: Assertion -> Assertion -> Assertion
-pairwise (Assertion s0 phi0) (Assertion s1 phi1) =
-  Assertion (Branch s0 s1)
-            (\case
-              Branch r0 r1 -> pand (phi0 r0) (phi1 r1)
+pairwise (Assertion ctx0 s0 phi0) (Assertion ctx1 s1 phi1) =
+  Assertion (ctx0 ++ ctx1) (Branch s0 s1)
+            (\vctx r -> case r of
+              Branch r0 r1 ->
+                pand (phi0 (if ctx0 == [] then [] else vctx) r0)
+                     (phi1 (if ctx1 == [] then [] else vctx) r1)
               _ -> undefined)
+
+left :: Assertion -> Assertion
+left (Assertion ctx (Branch v0 v1) phi) =
+  Assertion (L v0 : ctx) v1 (\ctx r ->
+    case ctx of
+      (L r0 : vctx) -> phi vctx (Branch r0 r)
+      _ -> undefined)
+left _ = undefined
+
+unleft :: Assertion -> Assertion
+unleft (Assertion (L ctx0:ctx) v phi) =
+  Assertion ctx (Branch ctx0 v) (\ctx r ->
+    case r of
+      Branch r0 r1 -> phi (L r0 : ctx) r1
+      _ -> undefined)
+unleft _ = undefined
+
+right :: Assertion -> Assertion
+right (Assertion ctx (Branch v0 v1) phi) =
+  Assertion (R v1 : ctx) v0 (\ctx r ->
+    case ctx of
+      (R r1 : vctx) -> phi vctx (Branch r r1)
+      _ -> undefined)
+right _ = undefined
+
+unright :: Assertion -> Assertion
+unright (Assertion (R ctx0:ctx) v phi) =
+  Assertion ctx (Branch v ctx0) (\ctx r ->
+    case r of
+      Branch r0 r1 -> phi (R r1 : ctx) r0
+      _ -> undefined)
+unright _ = undefined
 
 type M a = StateT Int (Writer [QProp]) a
 
-freshRel :: Vocab -> M Assertion
-freshRel v = do
+freshRel :: VocabCtxt -> Vocab -> M Assertion
+freshRel ctx v = do
+  let v' = contextualize ctx v
   c <- get
   put (c+1)
-  pure (Assertion v (\r -> Rel c (relVocab v r)))
+  pure (Assertion ctx v (\vctx r -> Rel c (relVocab v' (contextualize vctx r))))
   where
     relVocab :: Vocab -> VarChange -> [Expr]
     relVocab v r =
@@ -267,21 +321,25 @@ clause a0 a1 =
      split p = [p]
 
 mkAssertion :: Prop -> Assertion
-mkAssertion p = Assertion (Leaf $ pvocab p) (\case
+mkAssertion p = Assertion [] (Leaf $ pvocab p) (\_ r -> case r of
   Leaf r -> prename r p
   _ -> undefined)
 
 andE :: Assertion -> Prop -> Assertion
-andE a p = mkAnd a (mkAssertion p)
+andE (Assertion ctx v phi) p =
+  Assertion ctx (vocabUnion v (Leaf $ pvocab p)) (\vctx r -> case r of
+    Leaf r -> prename r p `pand` phi vctx (Leaf r)
+    _ -> undefined)
 
 subst :: Var -> Expr -> Assertion -> Assertion
-subst x e (Assertion v phi) =
-  Assertion v (\case
-    Leaf r -> psubst (r x) (erename r e) (phi (Leaf r))
+subst x e (Assertion ctx v phi) =
+  Assertion ctx v (\vctx r -> case r of
+    Leaf r -> psubst (r x) (erename r e) (phi vctx (Leaf r))
     _ -> undefined)
 
 addVar :: Var -> Assertion -> Assertion
-addVar x (Assertion (Leaf v) phi) = Assertion (Leaf (S.insert x v)) phi
+addVar x (Assertion ctx (Leaf v) phi) =
+  Assertion ctx (Leaf (S.insert x v)) phi
 
 loopless :: Com -> Bool
 loopless = \case
@@ -311,7 +369,7 @@ dispatch c q = do
     Assign x e ->
       pure (addVar x (subst x e q))
     Assert e -> do
-      p <- freshRel (Leaf (pvocab e) `vocabUnion` vocab q)
+      p <- freshRel (ctxt q) (Leaf (pvocab e) `vocabUnion` vocab q)
       clause (andE p e) q
       pure p
     Skip -> pure q
@@ -319,20 +377,20 @@ dispatch c q = do
       if loopless c0 || loopless c1
       then dispatch c0 =<< dispatch c1 q
       else do
-        r <- freshRel (cvocab c1 `vocabUnion` vocab q)
+        r <- freshRel (ctxt q) (cvocab c `vocabUnion` vocab q)
         p <- dispatch c0 r
         pr <- dispatch (Prod c0 c1) (pairwise r q)
         clause (pairwise p r) pr
         pure p
     Sum c0 c1 -> do
-      p <- freshRel (cvocab c `vocabUnion` vocab q)
+      p <- freshRel (ctxt q) (cvocab c `vocabUnion` vocab q)
       p0 <- dispatch c0 q
       p1 <- dispatch c1 q
       clause p p0
       clause p p1
       pure p
     Loop c -> do
-      p <- freshRel (cvocab c `vocabUnion` vocab q)
+      p <- freshRel (ctxt q) (cvocab c `vocabUnion` vocab q)
       r <- dispatch c p
       clause p r
       clause p q
@@ -340,15 +398,8 @@ dispatch c q = do
     Prod c0 c1 ->
       if loopless c0 || loopless c1
       then do
-        let Branch v0 v1 = vocab q `vocabUnion` cvocab c
-        p <- freshRel (Branch v0 v1)
-        q0 <- freshRel v0
-        q1 <- freshRel v1
-        p0 <- dispatch c0 q0
-        p1 <- dispatch c1 q1
-        clause (pairwise q0 q1) q
-        clause p (pairwise p0 p1)
-        pure p
+        r <- unleft <$> dispatch c1 (left q)
+        unright <$> dispatch c0 (right r)
       else
         case c1 of
           Sum c1' c1'' -> dispatch (Sum (Prod c0 c1') (Prod c0 c1'')) q
@@ -364,56 +415,6 @@ hoare :: Com -> [QProp]
 hoare c =
   let (p, ps) = runWriter $ evalStateT (dispatch c (mkAssertion F)) 0
    in quantify (instantiate p) : (reverse ps)
-
-example :: Com
-example =
-  Assign "x" (ALit 0) `Seq`
-  Assign "x" (Add (ALit 1) (V "x")) `Seq`
-  Assert (Not (Eql (V "x") (ALit 1)))
-
-example2 :: Com
-example2 =
-  Sum
-    (Assign "x" (ALit 0))
-    (Assign "x" (ALit 1))
-  `Seq`
-  Assert (Lt (V "x") (ALit 0))
-
-
-example3 :: Com
-example3 =
-  Assign "s0" (ALit 0) `Seq`
-  Assign "s1" (ALit 0) `Seq`
-  Assign "i0" (ALit 0) `Seq`
-  Assign "i1" (ALit 0) `Seq`
-  Loop (
-    Assert (Lt (V "i0") (V "n")) `Seq`
-    Assign "s0" (Add (V "s0") (V "i0")) `Seq`
-    Assign "i0" (Add (V "i0") (ALit 1))
-  ) `Seq`
-  Assert (Ge (V "i0") (V "n")) `Seq`
-  Loop (
-    Assert (Lt (V "i1") (V "n")) `Seq`
-    Assign "s1" (Add (V "s1") (V "i1")) `Seq`
-    Assign "i1" (Add (V "i1") (ALit 1))
-  ) `Seq`
-  Assert (Ge (V "i1") (V "n")) `Seq`
-  Assert (Not (
-    Impl
-      (Eql (V "i0") (V "i1"))
-      (Eql (V "s0") (V "s1"))))
-
-example4 :: Com
-example4 =
-  Assign "a" (ALit 0) `Seq`
-  Assign "b" (ALit 0) `Seq`
-  Loop (
-    Assert (Lt (V "b") (V "n")) `Seq`
-    Assign "b" (Add (V "b") (ALit 1)) `Seq`
-    Assign "a" (Add (V "a") (V "b"))
-  ) `Seq`
-  Assert (Not (Lt (V "b") (V "n"))) `Seq`
-  Assert (Not (Ge (V "a") (V "n")))
 
 showCom :: Com -> String
 showCom = \case
@@ -467,3 +468,53 @@ smt2Prop = \case
   Lt e0 e1 -> sexpr ["<", smt2Expr e0, smt2Expr e1]
   Ge e0 e1 -> sexpr [">=", smt2Expr e0, smt2Expr e1]
   Rel i es -> sexpr (("R" ++ show i) : map smt2Expr es)
+
+example :: Com
+example =
+  Assign "x" (ALit 0) `Seq`
+  Assign "x" (Add (ALit 1) (V "x")) `Seq`
+  Assert (Not (Eql (V "x") (ALit 1)))
+
+example2 :: Com
+example2 =
+  Sum
+    (Assign "x" (ALit 0))
+    (Assign "x" (ALit 1))
+  `Seq`
+  Assert (Lt (V "x") (ALit 0))
+
+
+example3 :: Com
+example3 =
+  Assign "s0" (ALit 0) `Seq`
+  Assign "s1" (ALit 0) `Seq`
+  Assign "i0" (ALit 0) `Seq`
+  Assign "i1" (ALit 0) `Seq`
+  Loop (
+    Assert (Lt (V "i0") (V "n")) `Seq`
+    Assign "s0" (Add (V "s0") (V "i0")) `Seq`
+    Assign "i0" (Add (V "i0") (ALit 1))
+  ) `Seq`
+  Assert (Ge (V "i0") (V "n")) `Seq`
+  Loop (
+    Assert (Lt (V "i1") (V "n")) `Seq`
+    Assign "s1" (Add (V "s1") (V "i1")) `Seq`
+    Assign "i1" (Add (V "i1") (ALit 1))
+  ) `Seq`
+  Assert (Ge (V "i1") (V "n")) `Seq`
+  Assert (Not (
+    Impl
+      (Eql (V "i0") (V "i1"))
+      (Eql (V "s0") (V "s1"))))
+
+example4 :: Com
+example4 =
+  Assign "a" (ALit 0) `Seq`
+  Assign "b" (ALit 0) `Seq`
+  Loop (
+    Assert (Lt (V "b") (V "n")) `Seq`
+    Assign "b" (Add (V "b") (ALit 1)) `Seq`
+    Assign "a" (Add (V "a") (V "b"))
+  ) `Seq`
+  Assert (Not (Lt (V "b") (V "n"))) `Seq`
+  Assert (Not (Ge (V "a") (V "n")))

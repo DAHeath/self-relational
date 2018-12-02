@@ -378,13 +378,9 @@ Theorem hoare_seq : forall P Q R c0 c1,
   {{P}} c0 ;; c1 {{Q}}.
 Proof.
   unfold triple; intros.
-  inversion H1; subst; clear H1.
-  assert (ceval (c0 *** c1) (st <*> st'0) (st'0 <*> st')).
-  - constructor; assumption.
-  - assert (pairwise P R (st <*> st'0) -> pairwise R Q (st'0 <*> st')).
-    intros.
-    eapply H0; eauto.
-    firstorder.
+  inversion H1; clear H1; subst.
+  assert (ceval (c0 *** c1) (st <*> st'0) (st'0 <*> st')); intuition.
+  eapply H0 in H1; firstorder.
 Qed.
 
 Theorem hoare_seq' : forall P Q R c0 c1,
