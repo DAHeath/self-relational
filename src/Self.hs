@@ -12,9 +12,6 @@ import Control.Monad.Except
 import qualified Data.Set as S
 import           Data.Set (Set)
 
-
-import Debug.Trace
-
 type Var = String
 
 -- | The space of arithmetic expressions.
@@ -173,6 +170,7 @@ data Ctxt = Ctxt
   { _vocab :: Vocab
   , _theState :: St
   , _stateCount :: Int
+  , _quantifiedState :: [St]
   }
 makeLenses ''Ctxt
 
@@ -186,10 +184,12 @@ data Triple = Triple Assertion Com Assertion
 rel :: M Assertion
 rel = do
   v <- view vocab
+  q <- view quantifiedState
+  let qvs = concatMap (`applyAll` v) q
   c <- id <<+= 1
   pure (\st ->
     let vs = applyAll st v
-     in Rel c vs)
+     in Rel c (qvs ++ vs))
   where
     applyAll :: St -> Vocab -> [Expr]
     applyAll (Singleton st) v = map (V . st) v
@@ -247,10 +247,14 @@ mergeLoops = \case
 localLeft, localRight :: (St -> M a) -> M a
 localLeft f = do
   (Composite st0 st1) <- view theState
-  local (theState .~ st0) (f st1)
+  local ( (theState .~ st0)
+        . (quantifiedState %~ (st1 :))
+        ) (f st1)
 localRight f = do
   (Composite st0 st1) <- view theState
-  local (theState .~ st1) (f st0)
+  local ( (theState .~ st1)
+        . (quantifiedState %~ (st0 :))
+        ) (f st0)
 
 localDouble :: M a -> M a
 localDouble ac = do
@@ -265,11 +269,22 @@ localDouble ac = do
       pure (Singleton (\v -> v ++ "_" ++ show c))
     go (Composite st0 st1) = Composite <$> go st0 <*> go st1
 
+localCommute :: M a -> M a
+localCommute ac = do
+  (st0 `Composite` st1) <- view theState
+  local (theState .~ (st1 `Composite` st0)) ac
+
+localAssociate :: M a -> M a
+localAssociate ac = do
+  (st0 `Composite` (st1 `Composite` st2)) <- view theState
+  local (theState .~ ((st0 `Composite` st1) `Composite` st0)) ac
+
 initialCtxt :: Com -> Ctxt
 initialCtxt c = Ctxt 
   { _vocab = S.toList $ cvocab c
   , _theState = Singleton (\v -> v ++ "_0")
   , _stateCount = 1
+  , _quantifiedState = []
   }
 
 triple :: Assertion -> Com -> Assertion -> M ()
@@ -277,7 +292,7 @@ triple p c q =
   case mergeLoops c of
     Skip -> p ==> q
     Assign x a -> p ==> (subst x a q)
-    Assert e -> do (andE p e) ==> q
+    Assert e -> andE p e ==> q
     Seq c0 c1 -> do
       r <- rel
       triple p c0 r
@@ -295,12 +310,12 @@ triple p c q =
       then do
         r <- rel
         localLeft (\st1 -> triple (right st1 p) c0 (right st1 r))
-        localRight (\st0 -> triple (left st0 r) c0 (left st0 q))
+        localRight (\st0 -> triple (left st0 r) c1 (left st0 q))
       else
         case c1 of
           Sum c1' c1'' -> triple p (Sum (Prod c0 c1') (Prod c0 c1'')) q
-          Prod c1' c1'' -> triple (associate p) (Prod (Prod c0 c1') c1'') (associate q)
-          Loop c1' -> triple (commute p) (Prod (Loop c1') c0) (commute q)
+          Prod c1' c1'' -> localAssociate (triple (associate p) (Prod (Prod c0 c1') c1'') (associate q))
+          Loop c1' -> localCommute (triple (commute p) (Prod (Loop c1') c0) (commute q))
           Seq c1' c1'' ->
             if loopless c1'
             then triple p (Seq (Prod Skip c1') (Prod c0 c1'')) q
