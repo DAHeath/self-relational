@@ -10,3 +10,4 @@ eql.cabal
 dist-newstyle/
 dist/
 Setup.hs
+.ghc.*

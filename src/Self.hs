@@ -1,10 +1,13 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE MultiWayIf #-}
+{-# LANGUAGE TemplateHaskell #-}
 module Self where
 
+import Control.Lens
 import Control.Monad.State
 import Control.Monad.Writer hiding (Sum)
+import Control.Monad.Reader
 import Control.Monad.Except
 import qualified Data.Set as S
 import           Data.Set (Set)
@@ -120,121 +123,33 @@ data Com
   | Loop Com
   deriving (Show, Read, Eq, Ord)
 
--- | A simple binary tree.
-data Tree a
-  = Leaf a
-  | Branch (Tree a) (Tree a)
-  deriving (Functor, Show, Read, Eq, Ord)
-
-data CtxtNode a
-  = L (Tree a)
-  | R (Tree a)
-  deriving (Functor, Show, Read, Eq, Ord)
-
-type Ctxt a = [CtxtNode a]
-
-contextualize :: Ctxt a -> Tree a -> Tree a
-contextualize [] t = t
-contextualize (L x:ctx) t = Branch x (contextualize ctx t)
-contextualize (R x:ctx) t = Branch (contextualize ctx t) x
-
--- | Zip two trees with the same shape.
-zipTree :: (a -> b -> c) -> Tree a -> Tree b -> Tree c
-zipTree f (Leaf a) (Leaf b) = Leaf (f a b)
-zipTree f (Branch a b) (Branch c d) = Branch (zipTree f a c) (zipTree f b d)
-
--- | A `vocabulary' consists of a tree where each leaf is a set of variables.
--- Once instantiated, the different leaves will be renamed with different
--- indices.
-type Vocab = Tree (Set Var)
-type VocabCtxt = Ctxt (Set Var)
-
--- | Zip the vocab trees.
-vocabUnion :: Vocab -> Vocab -> Vocab
-vocabUnion = zipTree S.union
-
-cvocab :: Com -> Vocab
+cvocab :: Com -> Set Var
 cvocab = \case
-  Assign x e -> Leaf (S.insert x (evocab e))
-  Assert p -> Leaf (pvocab p)
-  Skip -> Leaf S.empty
-  Seq c0 c1 -> vocabUnion (cvocab c0) (cvocab c1)
-  Sum c0 c1 -> vocabUnion (cvocab c0) (cvocab c1)
-  Prod c0 c1 -> Branch (cvocab c0) (cvocab c1)
+  Assign v e -> S.insert v $ evocab e
+  Assert p -> pvocab p
+  Skip -> S.empty
+  Seq c0 c1 -> cvocab c0 `S.union` cvocab c1
+  Sum c0 c1 -> cvocab c0 `S.union` cvocab c1
+  Prod c0 c1 -> cvocab c0 `S.union` cvocab c1
   Loop c -> cvocab c
 
--- | To implement program assertions, we need a consistent method for renaming
--- the variables in the assertions to some concrete, distinct values.
--- A VarChange is a tree which can apply different variable transformations to
--- different parts of assertions.
-type VarChange = Tree (Var -> Var)
-type VarChangeCtxt = Ctxt (Var -> Var)
 
--- | Given some tree shape, builds a VarChange which renames variables by
--- adding an index based on the position in the tree where the variable
--- appears.
-mkVarChange :: (Tree a, Ctxt a) -> (VarChange, VarChangeCtxt)
-mkVarChange (t, c) = evalState ((,) <$> tree t <*> ctxt c) 0
-  where
-    ctxt = \case
-      [] -> pure []
-      (L x:cs) -> (:) <$> (L <$> tree x) <*> ctxt cs
-      (R x:cs) -> (:) <$> (R <$> tree x) <*> ctxt cs
+data St = Singleton (Var -> Var) | Composite St St
+type Vocab = [Var]
 
-    tree :: Tree a -> State Int VarChange
-    tree = \case
-      Leaf _ -> do
-        c <- get
-        put (c+1)
-        pure $ Leaf (\n -> n ++ "_" ++ show c)
-      Branch s0 s1 -> Branch <$> tree s0 <*> tree s1
-
--- | An assertion can be thought of as a smart constructor for a Proposition.
--- The key difference is that an assertion can be over multiple program states
--- simultaneously. To distinguish the different program states, we use a
--- VarChange to rename the various variables appropriately.
--- In addition, an assertion carries a Vocabulary with live variables.
-
-type Fact = VarChangeCtxt -> VarChange -> Prop
-
-data Assertion = Assertion
-  { ctxt :: VocabCtxt
-  , vocab :: Vocab
-  , fact :: Fact
-  }
-
--- | Instiate the assertion by applying a VarChange based on the assertion
--- vocabulary.
-instantiate :: Assertion -> Prop
-instantiate (Assertion ctx v phi) = uncurry (flip phi) (mkVarChange (v, ctx))
+type Assertion = St -> Prop
 
 -- | Commute the assertion: That is, swap how the assertion is applied to the
 -- VarChange.
 commute :: Assertion -> Assertion
-commute (Assertion ctx (Branch s0 s1) phi) =
-  Assertion ctx (Branch s1 s0)
-            (\vctx r -> case r of
-                Branch r0 r1 -> phi vctx (Branch r1 r0)
-                _ -> undefined)
-commute _ = undefined
+commute p (Composite st1 st0) = p (Composite st0 st1)
+commute _ _ = undefined
 
 -- | Associate the assertion: That is, rotate how the assertion is applied to the
 -- VarChange.
-associateL :: Assertion -> Assertion
-associateL (Assertion ctx (Branch s0 (Branch s1 s2)) phi) =
-  Assertion ctx (Branch (Branch s0 s1) s2)
-            (\vctx r -> case r of
-                Branch (Branch r0 r1) r2 -> phi vctx (Branch r0 (Branch r1 r2))
-                _ -> undefined)
-associateL _ = undefined
-
-associateR :: Assertion -> Assertion
-associateR (Assertion ctx ((Branch (Branch s0 s1) s2)) phi) =
-  Assertion ctx (Branch s0 (Branch s1 s2))
-            (\vctx r -> case r of
-               Branch r0 (Branch r1 r2) -> phi vctx (Branch (Branch r0 r1) r2)
-               _ -> undefined)
-associateR _ = undefined
+associate :: Assertion -> Assertion
+associate p (Composite (Composite s0 s1) s2) = p (Composite s0 (Composite s1 s2))
+associate _ _ = undefined
 
 pand :: Prop -> Prop -> Prop
 pand T p = p
@@ -244,102 +159,70 @@ pand _ F = F
 pand p q = p `And` q
 
 mkImpl :: Assertion -> Assertion -> Assertion
-mkImpl (Assertion ctx0 s0 phi0) (Assertion _ s1 phi1) =
-  Assertion ctx0 (vocabUnion s0 s1) (\vctx r -> phi0 vctx r `Impl` phi1 vctx r)
+mkImpl p0 p1 = \st -> p0 st `Impl` p1 st
 
 pairwise :: Assertion -> Assertion -> Assertion
-pairwise (Assertion ctx0 s0 phi0) (Assertion ctx1 s1 phi1) =
-  Assertion (ctx0 ++ ctx1) (Branch s0 s1)
-            (\vctx r -> case r of
-              Branch r0 r1 ->
-                pand (phi0 (if ctx0 == [] then [] else vctx) r0)
-                     (phi1 (if ctx1 == [] then [] else vctx) r1)
-              _ -> undefined)
+pairwise p0 p1 (Composite st0 st1) = p0 st0 `And` p1 st1
+pairwise _ _ _ = undefined
 
-left :: Assertion -> Assertion
-left (Assertion ctx (Branch v0 v1) phi) =
-  Assertion (L v0 : ctx) v1 (\ctx r ->
-    case ctx of
-      (L r0 : vctx) -> phi vctx (Branch r0 r)
-      _ -> undefined)
-left _ = undefined
+left, right :: St -> Assertion -> Assertion
+left st0 p = \st1 -> p (Composite st0 st1)
+right st1 p = \st0 -> p (Composite st0 st1)
 
-unleft :: Assertion -> Assertion
-unleft (Assertion (L ctx0:ctx) v phi) =
-  Assertion ctx (Branch ctx0 v) (\ctx r ->
-    case r of
-      Branch r0 r1 -> phi (L r0 : ctx) r1
-      _ -> undefined)
-unleft _ = undefined
-
-right :: Assertion -> Assertion
-right (Assertion ctx (Branch v0 v1) phi) =
-  Assertion (R v1 : ctx) v0 (\ctx r ->
-    case ctx of
-      (R r1 : vctx) -> phi vctx (Branch r r1)
-      _ -> undefined)
-right _ = undefined
-
-unright :: Assertion -> Assertion
-unright (Assertion (R ctx0:ctx) v phi) =
-  Assertion ctx (Branch v ctx0) (\ctx r ->
-    case r of
-      Branch r0 r1 -> phi (R r1 : ctx) r0
-      _ -> undefined)
-unright _ = undefined
-
-type M a = StateT Int (Writer [QProp]) a
-
-freshRel :: VocabCtxt -> Vocab -> M Assertion
-freshRel ctx v = do
-  let v' = contextualize ctx v
-  c <- get
-  put (c+1)
-  pure (Assertion ctx v (\vctx r -> Rel c (relVocab v' (contextualize vctx r))))
-  where
-    relVocab :: Vocab -> VarChange -> [Expr]
-    relVocab v r =
-      case (v, r) of
-        (Leaf v, Leaf r) -> map (V . r) (S.toList v)
-        (Branch v0 v1, Branch r0 r1) -> relVocab v0 r0 ++ relVocab v1 r1
-        _ -> undefined
+data Ctxt = Ctxt
+  { _vocab :: Vocab
+  , _theState :: St
+  , _stateCount :: Int
+  }
+makeLenses ''Ctxt
 
 data QProp = Forall [Var] Prop
   deriving (Show, Read, Eq, Ord)
 
+type M a = ReaderT Ctxt (StateT Int (Writer [QProp])) a
+
+data Triple = Triple Assertion Com Assertion
+
+rel :: M Assertion
+rel = do
+  v <- view vocab
+  c <- id <<+= 1
+  pure (\st ->
+    let vs = applyAll st v
+     in Rel c vs)
+  where
+    applyAll :: St -> Vocab -> [Expr]
+    applyAll (Singleton st) v = map (V . st) v
+    applyAll (Composite st0 st1) v = applyAll st0 v ++ applyAll st1 v
+
 quantify :: Prop -> QProp
 quantify p = Forall (S.toList (pvocab p)) p
 
-clause :: Assertion -> Assertion -> M ()
-clause a0 a1 =
-  let p = instantiate $ mkImpl a0 a1
-      ps = split p
-  in tell (map quantify ps)
+(==>) :: Assertion -> Assertion -> M ()
+(==>) a0 a1 = do
+  st <- view theState
+  let p = mkImpl a0 a1 st
+  let ps = split p
+  tell (map quantify ps)
    where
      split :: Prop -> [Prop]
      split (Impl p (And q r)) = split (Impl p q) ++ split (Impl p r)
      split p = [p]
 
 mkAssertion :: Prop -> Assertion
-mkAssertion p = Assertion [] (Leaf $ pvocab p) (\_ r -> case r of
-  Leaf r -> prename r p
+mkAssertion p = (\st -> case st of
+  Singleton st -> prename st p
   _ -> undefined)
 
 andE :: Assertion -> Prop -> Assertion
-andE (Assertion ctx v phi) p =
-  Assertion ctx (vocabUnion v (Leaf $ pvocab p)) (\vctx r -> case r of
-    Leaf r -> prename r p `pand` phi vctx (Leaf r)
-    _ -> undefined)
+andE p q = \case
+  Singleton st -> prename st q `pand` p (Singleton st)
+  _ -> undefined
 
 subst :: Var -> Expr -> Assertion -> Assertion
-subst x e (Assertion ctx v phi) =
-  Assertion ctx v (\vctx r -> case r of
-    Leaf r -> psubst (r x) (erename r e) (phi vctx (Leaf r))
-    _ -> undefined)
-
-addVar :: Var -> Assertion -> Assertion
-addVar x (Assertion ctx (Leaf v) phi) =
-  Assertion ctx (Leaf (S.insert x v)) phi
+subst x e p = \case
+  Singleton st -> psubst (st x) (erename st e) (p (Singleton st))
+  _ -> undefined
 
 loopless :: Com -> Bool
 loopless = \case
@@ -361,60 +244,74 @@ mergeLoops = \case
          _ -> Prod c0' c1'
   c -> c
 
-dispatch :: Com -> Assertion -> M Assertion
-dispatch c q = do
-  traceM (showCom $ mergeLoops c)
-  traceM ""
+localLeft, localRight :: (St -> M a) -> M a
+localLeft f = do
+  (Composite st0 st1) <- view theState
+  local (theState .~ st0) (f st1)
+localRight f = do
+  (Composite st0 st1) <- view theState
+  local (theState .~ st1) (f st0)
+
+localDouble :: M a -> M a
+localDouble ac = do
+  c <- view stateCount
+  st <- view theState
+  let (st', c') = runState (go st) c
+  local ((stateCount .~ c') . (theState .~ (st `Composite` st'))) ac
+  where
+    go :: St -> State Int St
+    go (Singleton st) = do
+      c <- id <<+= 1
+      pure (Singleton (\v -> v ++ "_" ++ show c))
+    go (Composite st0 st1) = Composite <$> go st0 <*> go st1
+
+initialCtxt :: Com -> Ctxt
+initialCtxt c = Ctxt 
+  { _vocab = S.toList $ cvocab c
+  , _theState = Singleton (\v -> v ++ "_0")
+  , _stateCount = 1
+  }
+
+triple :: Assertion -> Com -> Assertion -> M ()
+triple p c q =
   case mergeLoops c of
-    Assign x e ->
-      pure (addVar x (subst x e q))
-    Assert e -> do
-      p <- freshRel (ctxt q) (Leaf (pvocab e) `vocabUnion` vocab q)
-      clause (andE p e) q
-      pure p
-    Skip -> pure q
-    Seq c0 c1 ->
+    Skip -> p ==> q
+    Assign x a -> p ==> (subst x a q)
+    Assert e -> do (andE p e) ==> q
+    Seq c0 c1 -> do
+      r <- rel
+      triple p c0 r
       if loopless c0 || loopless c1
-      then dispatch c0 =<< dispatch c1 q
-      else do
-        r <- freshRel (ctxt q) (cvocab c `vocabUnion` vocab q)
-        p <- dispatch c0 r
-        pr <- dispatch (Prod c0 c1) (pairwise r q)
-        clause (pairwise p r) pr
-        pure p
+      then triple r c1 q
+      else localDouble (triple (pairwise p r) (Prod c0 c1) (pairwise r q))
     Sum c0 c1 -> do
-      p <- freshRel (ctxt q) (cvocab c `vocabUnion` vocab q)
-      p0 <- dispatch c0 q
-      p1 <- dispatch c1 q
-      clause p p0
-      clause p p1
-      pure p
+      triple p c0 q
+      triple p c1 q
     Loop c -> do
-      p <- freshRel (ctxt q) (cvocab c `vocabUnion` vocab q)
-      r <- dispatch c p
-      clause p r
-      clause p q
-      pure p
+      p ==> q
+      triple q c q
     Prod c0 c1 ->
       if loopless c0 || loopless c1
       then do
-        r <- unleft <$> dispatch c1 (left q)
-        unright <$> dispatch c0 (right r)
+        r <- rel
+        localLeft (\st1 -> triple (right st1 p) c0 (right st1 r))
+        localRight (\st0 -> triple (left st0 r) c0 (left st0 q))
       else
         case c1 of
-          Sum c1' c1'' -> dispatch (Sum (Prod c0 c1') (Prod c0 c1'')) q
-          Prod c1' c1'' -> associateR <$> dispatch (Prod (Prod c0 c1') c1'') (associateL q)
-          Loop c1' -> commute <$> dispatch (Prod (Loop c1') c0) (commute q)
+          Sum c1' c1'' -> triple p (Sum (Prod c0 c1') (Prod c0 c1'')) q
+          Prod c1' c1'' -> triple (associate p) (Prod (Prod c0 c1') c1'') (associate q)
+          Loop c1' -> triple (commute p) (Prod (Loop c1') c0) (commute q)
           Seq c1' c1'' ->
             if loopless c1'
-            then dispatch (Seq (Prod Skip c1') (Prod c0 c1'')) q
-            else dispatch (Seq (Prod c0 c1') (Prod Skip c1'')) q
+            then triple p (Seq (Prod Skip c1') (Prod c0 c1'')) q
+            else triple p (Seq (Prod c0 c1') (Prod Skip c1'')) q
           _ -> error ("Some impossible state has been reached: `" ++ showCom c ++ "`.")
 
 hoare :: Com -> [QProp]
 hoare c =
-  let (p, ps) = runWriter $ evalStateT (dispatch c (mkAssertion F)) 0
-   in quantify (instantiate p) : (reverse ps)
+  let ctx = initialCtxt c
+   in execWriter $ evalStateT (runReaderT
+        (triple (mkAssertion T) c (mkAssertion F)) ctx) 0
 
 showCom :: Com -> String
 showCom = \case
