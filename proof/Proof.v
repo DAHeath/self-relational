@@ -266,17 +266,21 @@ Qed.
 
 Definition Assertion := state -> Prop.
 
+Definition triple (P:Assertion) (c:com) (Q:Assertion) : Prop :=
+  forall st st', ceval c st st' -> P st -> Q st'.
+
+Definition mtriple (P:Assertion) (c:com) (Q:Assertion) : Prop :=
+  forall st st', ceval c st st' -> P (st <*> st') -> Q (st <*> st').
+
+Notation "{{ P }} c {{ Q }}" := (triple P c Q) (at level 90, c at next level).
+Notation "[[ P ]] c [[ Q ]]" := (mtriple P c Q) (at level 90, c at next level).
+
 Definition assn_sub x e P : Assertion :=
   fun (st : state) => match st with
   | singleton s => P (singleton (stupdate x (aeval s e) s))
   | singleton s <*> st' => P (singleton (stupdate x (aeval s e) s) <*> st')
   | _ <*> _ => False
   end.
-
-Definition triple (P:Assertion) (c:com) (Q:Assertion) : Prop :=
-  forall st st', ceval c st st' -> P st -> Q st'.
-
-Notation "{{ P }} c {{ Q }}" := (triple P c Q) (at level 90, c at next level).
 
 Definition bassn b : Assertion :=
   fun st => match st with
@@ -377,6 +381,33 @@ Definition left (P:Assertion) st0 : Assertion :=
 
 Definition right (P:Assertion) st1 : Assertion :=
   fun st0 => P (st0 <*> st1).
+
+Definition const_l (P:Assertion) : Assertion :=
+  fun st => match st with
+  | singleton _ => False
+  | composite st0 st1 => P st0
+  end.
+
+Definition const_r (P:Assertion) : Assertion :=
+  fun st => match st with
+  | singleton _ => False
+  | composite st0 st1 => P st1
+  end.
+
+Theorem hoare_seq : forall (P Q : Assertion) R S c0 c1,
+  [[const_l P]] c0 [[R]] ->
+  [[S]] c1 [[const_r Q]] ->
+  {{R}} c0 *** c1 {{S}} ->
+  {{P}} c0 ;; c1 {{Q}}.
+Proof.
+  unfold mtriple, triple; intros.
+  inversion H2; clear H2; subst.
+  eapply H0.
+  eauto.
+  eapply H1.
+  eauto.
+  eapply H; eauto.
+Qed.
 
 Theorem hoare_seq : forall P Q R S c0 c1,
   (forall st0, {{P}} c0 {{left R st0}}) ->
