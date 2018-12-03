@@ -294,15 +294,17 @@ triple p c q =
     Assign x a -> p ==> (subst x a q)
     Assert e -> andE p e ==> q
     Seq c0 c1 -> do
-      r <- rel
-      triple p c0 r
       if loopless c0 || loopless c1
       then do
+        r <- rel
+        triple p c0 r
         triple r c1 q
       else
         localDouble (do
+          r <- rel
           s <- rel
-          triple (pairwise p r) (Prod c0 c1) s
+          triple r (Prod c0 c1) s
+          localRight (\st0 -> triple p c0 (left st0 r))
           localLeft (\st1 -> triple (right st1 s) c1 q))
     Sum c0 c1 -> do
       triple p c0 q

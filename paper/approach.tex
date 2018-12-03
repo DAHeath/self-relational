@@ -84,8 +84,9 @@ TODO
   }
   \qquad
   \inference[\textsc{Seq}]{%
-    \hoare{P}{c_0}{R}&
-    \hoare{\pairwise(P,R)}{c_0 \times c_1}{\pairwise(R, Q)}
+    \forall \sigma_0.\hoare{P}{c_0}{\aleft(R, \sigma_0)}&
+    \forall \sigma_1.\hoare{\aright(S, \sigma_1)}{c_1}{Q}\\
+    \hoare{R}{c_0 \times c_1}{S}
   }{%
     \hoare{P}{\cseq{c_0}{c_1}}{Q}
   }

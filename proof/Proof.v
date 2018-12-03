@@ -372,15 +372,26 @@ Definition pairwise (P:Assertion) (Q:Assertion) : Assertion :=
             | composite st0 st1 => P st0 /\ Q st1
             end.
 
-Theorem hoare_seq : forall P Q R c0 c1,
-  {{P}} c0 {{R}} ->
-  {{pairwise P R}} c0 *** c1 {{pairwise R Q}} ->
+Definition left (P:Assertion) st0 : Assertion :=
+  fun st1 => P (st0 <*> st1).
+
+Definition right (P:Assertion) st1 : Assertion :=
+  fun st0 => P (st0 <*> st1).
+
+Theorem hoare_seq : forall P Q R S c0 c1,
+  (forall st0, {{P}} c0 {{left R st0}}) ->
+  (forall st1, {{right S st1}} c1 {{Q}}) ->
+  {{R}} c0 *** c1 {{S}} ->
   {{P}} c0 ;; c1 {{Q}}.
 Proof.
   unfold triple; intros.
-  inversion H1; clear H1; subst.
-  assert (ceval (c0 *** c1) (st <*> st'0) (st'0 <*> st')); intuition.
-  eapply H0 in H1; firstorder.
+  inversion H2; clear H2; subst.
+  eapply H0; eauto.
+  assert (S (st'0 <*> st')).
+  - eapply H1. econstructor; eauto.
+    eapply H. eauto.
+    eauto.
+  - unfold right. eauto.
 Qed.
 
 Theorem hoare_seq' : forall P Q R c0 c1,
@@ -405,12 +416,6 @@ Proof.
   firstorder.
 Qed.
 
-Definition left (P:Assertion) st0 : Assertion :=
-  fun st1 => P (st0 <*> st1).
-
-Definition right (P:Assertion) st1 : Assertion :=
-  fun st0 => P (st0 <*> st1).
-
 Theorem hoare_prod : forall (P Q R : Assertion) c0 c1,
   (forall st1, {{right P st1}} c0 {{right R st1}}) ->
   (forall st0, {{left R st0}} c1 {{left Q st0}}) ->
@@ -419,20 +424,6 @@ Proof.
   unfold triple, left, right; intros.
   inversion H1; subst.
   eauto.
-Qed.
-
-Theorem hoare_pseq : forall P Q R S c0 c1,
-  {{P}} c0 {{R}} ->
-  (forall st0, {{right S st0}} c1 {{Q}}) ->
-  {{pairwise P R}} c0 *** c1 {{S}} ->
-  {{P}} c0 ;; c1 {{Q}}.
-Proof.
-  unfold triple; intros.
-  inversion H2; clear H2; subst.
-  eapply H0; eauto.
-  assert (S (st'0 <*> st')).
-  - eapply H1; econstructor; eauto.
-  - eauto.
 Qed.
 
 Theorem hoare_cons : forall (P P' Q Q' : Assertion) c,
