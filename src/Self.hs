@@ -297,8 +297,13 @@ triple p c q =
       r <- rel
       triple p c0 r
       if loopless c0 || loopless c1
-      then triple r c1 q
-      else localDouble (triple (pairwise p r) (Prod c0 c1) (pairwise r q))
+      then do
+        triple r c1 q
+      else
+        localDouble (do
+          s <- rel
+          triple (pairwise p r) (Prod c0 c1) s
+          localLeft (\st1 -> triple (right st1 s) c1 q))
     Sum c0 c1 -> do
       triple p c0 q
       triple p c1 q
@@ -414,10 +419,7 @@ example3 =
     Assign "i1" (Add (V "i1") (ALit 1))
   ) `Seq`
   Assert (Ge (V "i1") (V "n")) `Seq`
-  Assert (Not (
-    Impl
-      (Eql (V "i0") (V "i1"))
-      (Eql (V "s0") (V "s1"))))
+  Assert (Not (Eql (V "s0") (V "s1")))
 
 example4 :: Com
 example4 =

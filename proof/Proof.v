@@ -421,6 +421,20 @@ Proof.
   eauto.
 Qed.
 
+Theorem hoare_pseq : forall P Q R S c0 c1,
+  {{P}} c0 {{R}} ->
+  (forall st0, {{right S st0}} c1 {{Q}}) ->
+  {{pairwise P R}} c0 *** c1 {{S}} ->
+  {{P}} c0 ;; c1 {{Q}}.
+Proof.
+  unfold triple; intros.
+  inversion H2; clear H2; subst.
+  eapply H0; eauto.
+  assert (S (st'0 <*> st')).
+  - eapply H1; econstructor; eauto.
+  - eauto.
+Qed.
+
 Theorem hoare_cons : forall (P P' Q Q' : Assertion) c,
   (forall st, P st -> P' st) ->
   (forall st, Q' st -> Q st) ->
