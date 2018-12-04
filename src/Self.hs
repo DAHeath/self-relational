@@ -303,9 +303,9 @@ triple p c q =
         localDouble (do
           r <- rel
           s <- rel
-          triple r (Prod c0 c1) s
-          localRight (\st0 -> triple p c0 (left st0 r))
-          localLeft (\st1 -> triple (right st1 s) c1 q))
+          triple (pairwise p p) (Prod Skip c0) r
+          triple s (Prod c1 Skip) (pairwise q q)
+          triple r (Prod c0 c1) s)
     Sum c0 c1 -> do
       triple p c0 q
       triple p c1 q

@@ -394,35 +394,29 @@ Definition const_r (P:Assertion) : Assertion :=
   | composite st0 st1 => P st1
   end.
 
-Theorem hoare_seq : forall (P Q : Assertion) R S c0 c1,
-  [[const_l P]] c0 [[R]] ->
-  [[S]] c1 [[const_r Q]] ->
-  {{R}} c0 *** c1 {{S}} ->
-  {{P}} c0 ;; c1 {{Q}}.
-Proof.
-  unfold mtriple, triple; intros.
-  inversion H2; clear H2; subst.
-  eapply H0.
-  eauto.
-  eapply H1.
-  eauto.
-  eapply H; eauto.
-Qed.
-
-Theorem hoare_seq : forall P Q R S c0 c1,
-  (forall st0, {{P}} c0 {{left R st0}}) ->
-  (forall st1, {{right S st1}} c1 {{Q}}) ->
+Theorem hoare_seq : forall (P Q R S : Assertion) c0 c1,
+  {{pairwise P P}} SKIP *** c0 {{R}} ->
+  {{S}} c1 *** SKIP {{pairwise Q Q}} ->
   {{R}} c0 *** c1 {{S}} ->
   {{P}} c0 ;; c1 {{Q}}.
 Proof.
   unfold triple; intros.
   inversion H2; clear H2; subst.
-  eapply H0; eauto.
-  assert (S (st'0 <*> st')).
-  - eapply H1. econstructor; eauto.
-    eapply H. eauto.
-    eauto.
-  - unfold right. eauto.
+  assert (pairwise Q Q (st' <*> st')).
+  eapply H0.
+  econstructor. eauto.
+  eauto.
+  eapply H1.
+  econstructor.
+  eauto.
+  eauto.
+  eapply H.
+  econstructor.
+  eauto.
+  eauto.
+  simpl.
+  eauto.
+  eapply H2.
 Qed.
 
 Theorem hoare_seq' : forall P Q R c0 c1,
