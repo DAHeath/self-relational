@@ -38,8 +38,8 @@ Inductive com :=
 | cprod : com -> com -> com
 | cloop : com -> com
 | cskip : com
-| cexpand : com -> com
-| ccontract : com -> com.
+| cfork : com -> com
+| cjoin : com -> com.
 
 Notation "x '::=' a" := (cassign x a) (at level 20).
 Notation "'ASSUME' e" := (cassume e) (at level 20, right associativity).
@@ -47,8 +47,8 @@ Notation "c0 ';;' c1" := (cseq c0 c1) (at level 55, right associativity).
 Notation "c0 '+++' c1" := (csum c0 c1) (at level 60, right associativity).
 Notation "c0 '***' c1" := (cprod c0 c1) (at level 65, right associativity).
 Notation "'LOOP' '{' c0 '}'" := (cloop c0) (at level 20, right associativity).
-Notation "'EXPAND' c" := (cexpand c) (at level 20, right associativity).
-Notation "'CONTRACT' c" := (ccontract c) (at level 20, right associativity).
+Notation "'FORK' c" := (cfork c) (at level 20, right associativity).
+Notation "'JOIN' c" := (cjoin c) (at level 20, right associativity).
 Notation "'SKIP'" := cskip.
 
 Inductive state :=
@@ -116,12 +116,12 @@ Inductive ceval : com -> state -> state -> Prop :=
 | EBreak : forall st c,
     ceval (cloop c) st st
 | ESkip : forall st, ceval cskip st st
-| EExpand : forall st st' c,
+| EFork : forall st st' c,
     ceval c st st' ->
-    ceval (EXPAND c) st (st <*> st')
-| EContract : forall st st' c,
+    ceval (FORK c) st (st <*> st')
+| EJoin : forall st st' c,
     ceval c st st' ->
-    ceval (CONTRACT c) (st <*> st') st'.
+    ceval (JOIN c) (st <*> st') st'.
 Hint Constructors ceval.
 
 Definition supersedes (c0:com) (c1:com) : Prop :=
@@ -400,18 +400,18 @@ Definition const_r (P:Assertion) : Assertion :=
   | composite st0 st1 => P st1
   end.
 
-Theorem hoare_expand : forall (P Q : Assertion) c,
+Theorem hoare_fork : forall (P Q : Assertion) c,
   {{P}} c {{Q}} ->
-  {{P}} EXPAND c {{pairwise P Q}}.
+  {{P}} FORK c {{pairwise P Q}}.
 Proof.
   unfold triple; intros.
   inversion H0; subst.
   econstructor; eauto.
 Qed.
 
-Theorem hoare_contract : forall (P Q : Assertion) c,
+Theorem hoare_join : forall (P Q : Assertion) c,
   {{P}} c {{Q}} ->
-  {{pairwise P Q}} CONTRACT c {{Q}}.
+  {{pairwise P Q}} JOIN c {{Q}}.
 Proof.
   unfold triple; intros.
   inversion H0; subst.
@@ -419,8 +419,8 @@ Proof.
 Qed.
 
 Theorem hoare_seq : forall (P Q R S : Assertion) c0 c1,
-  {{P}} EXPAND c0 {{R}} ->
-  {{S}} CONTRACT c1 {{Q}} ->
+  {{P}} FORK c0 {{R}} ->
+  {{S}} JOIN c1 {{Q}} ->
   {{R}} c0 *** c1 {{S}} ->
   {{P}} c0 ;; c1 {{Q}}.
 Proof.

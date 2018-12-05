@@ -118,6 +118,8 @@ data Com
   | Sum Com Com
   | Prod Com Com
   | Loop Com
+  | Fork Com
+  | Join Com
   deriving (Show, Read, Eq, Ord)
 
 cvocab :: Com -> Set Var
@@ -129,6 +131,8 @@ cvocab = \case
   Sum c0 c1 -> cvocab c0 `S.union` cvocab c1
   Prod c0 c1 -> cvocab c0 `S.union` cvocab c1
   Loop c -> cvocab c
+  Fork c -> cvocab c
+  Join c -> cvocab c
 
 
 data St = Singleton (Var -> Var) | Composite St St
@@ -165,6 +169,9 @@ pairwise _ _ _ = undefined
 left, right :: St -> Assertion -> Assertion
 left st0 p = \st1 -> p (Composite st0 st1)
 right st1 p = \st0 -> p (Composite st0 st1)
+
+fork :: Assertion -> Assertion
+fork phi st = phi (Composite st st)
 
 data Ctxt = Ctxt
   { _vocab :: Vocab
@@ -233,6 +240,8 @@ loopless = \case
   Assert{} -> True
   Assign{} -> True
   Skip -> True
+  Fork c -> loopless c
+  Join c -> loopless c
 
 mergeLoops :: Com -> Com
 mergeLoops = \case
@@ -299,16 +308,25 @@ triple p c q =
         r <- rel
         triple p c0 r
         triple r c1 q
-      else
-        localDouble (do
+      else do
+        (r, s) <- localDouble (do
           r <- rel
           s <- rel
-          triple (pairwise p p) (Prod Skip c0) r
-          triple s (Prod c1 Skip) (pairwise q q)
-          triple r (Prod c0 c1) s)
+          triple r (Prod c0 c1) s
+          pure (r, s))
+        triple p (Fork c0) r
+        triple s (Join c1) q
     Sum c0 c1 -> do
       triple p c0 q
       triple p c1 q
+    Fork c -> do
+      r <- rel
+      triple p c (fork q)
+      localDouble (pairwise p r ==> q)
+    Join c -> do
+      r <- rel
+      triple (fork p) c q
+      localDouble (p ==> pairwise r q)
     Loop c -> do
       p ==> q
       triple q c q
@@ -349,6 +367,8 @@ showCom = \case
   Sum c0 c1 -> "{" ++ showCom c0 ++ "} +\n {" ++ showCom c1 ++ "}"
   Prod c0 c1 -> "{" ++ showCom c0 ++ "} *\n {" ++ showCom c1 ++ "}"
   Loop c -> "LOOP {\n" ++ showCom c ++ "}"
+  Fork c -> "Fork ( " ++ showCom c ++ " )"
+  Join c -> "Join ( " ++ showCom c ++ " )"
 
 sexpr :: [String] -> String
 sexpr ss = "(" ++ unwords ss ++ ")"
