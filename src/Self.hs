@@ -333,7 +333,12 @@ hoare :: Com -> [QProp]
 hoare c =
   let ctx = initialCtxt c
    in execWriter $ evalStateT (runReaderT
-        (triple (mkAssertion T) c (mkAssertion F)) ctx) 0
+        (do
+          p <- rel
+          q <- rel
+          mkAssertion T ==> p
+          triple p c q
+          q ==> mkAssertion F) ctx) 0
 
 showCom :: Com -> String
 showCom = \case
@@ -421,7 +426,7 @@ example3 =
     Assign "i1" (Add (V "i1") (ALit 1))
   ) `Seq`
   Assert (Ge (V "i1") (V "n")) `Seq`
-  Assert (Not (Eql (V "s0") (V "s1")))
+  Assert (Not (Impl (Eql (V "i0") (V "i1")) (Eql (V "s0") (V "s1"))))
 
 example4 :: Com
 example4 =
