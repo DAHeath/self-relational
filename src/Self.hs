@@ -11,6 +11,10 @@ import Control.Monad.Reader
 import Control.Monad.Except
 import qualified Data.Set as S
 import           Data.Set (Set)
+import qualified Data.Map as M
+import           Data.Map (Map)
+
+import Debug.Trace
 
 type Var = String
 
@@ -29,11 +33,17 @@ esubst x e = \case
   where
     go = esubst x e
 
-erename :: (Var -> Var) -> Expr -> Expr
-erename f = \case
+erename :: Int -> Expr -> Expr
+erename c = \case
   ALit i -> ALit i
-  V v -> V (f v)
-  Add a0 a1 -> Add (erename f a0) (erename f a1)
+  V v -> V (v ++ "_" ++ show c)
+  Add a0 a1 -> Add (erename c a0) (erename c a1)
+
+elookup :: (Map Var Expr) -> Expr -> Expr
+elookup m = \case
+  ALit i -> ALit i
+  V v -> M.findWithDefault (V v) v m
+  Add a0 a1 -> Add (elookup m a0) (elookup m a1)
 
 evocab :: Expr -> Set Var
 evocab = \case
@@ -71,8 +81,8 @@ psubst x e = \case
     go = psubst x e
     goe = esubst x e
 
-prename :: (Var -> Var) -> Prop -> Prop
-prename f= \case
+prename :: Int -> Prop -> Prop
+prename i = \case
   T -> T
   F -> F
   Not p -> Not (go p)
@@ -82,8 +92,22 @@ prename f= \case
   Lt e0 e1 -> Lt (goe e0) (goe e1)
   Ge e0 e1 -> Ge (goe e0) (goe e1)
   where
-    go = prename f
-    goe = erename f
+    go = prename i
+    goe = erename i
+
+plookup :: (Map Var Expr) -> Prop -> Prop
+plookup m = \case
+  T -> T
+  F -> F
+  Not p -> Not (go p)
+  And p0 p1 -> And (go p0) (go p1)
+  Impl p0 p1 -> Impl (go p0) (go p1)
+  Eql e0 e1 -> Eql (goe e0) (goe e1)
+  Lt e0 e1 -> Lt (goe e0) (goe e1)
+  Ge e0 e1 -> Ge (goe e0) (goe e1)
+  where
+    go = plookup m
+    goe = elookup m
 
 pvocab :: Prop -> Set Var
 pvocab = \case
@@ -118,8 +142,6 @@ data Com
   | Sum Com Com
   | Prod Com Com
   | Loop Com
-  | Fork Com
-  | Join Com
   deriving (Show, Read, Eq, Ord)
 
 cvocab :: Com -> Set Var
@@ -131,12 +153,14 @@ cvocab = \case
   Sum c0 c1 -> cvocab c0 `S.union` cvocab c1
   Prod c0 c1 -> cvocab c0 `S.union` cvocab c1
   Loop c -> cvocab c
-  Fork c -> cvocab c
-  Join c -> cvocab c
 
 
-data St = Singleton (Var -> Var) | Composite St St
+data St = Singleton Int (Map Var Expr) | Composite St St
 type Vocab = [Var]
+
+mkSingleton :: Int -> Vocab -> St
+mkSingleton i v =
+  Singleton i (M.fromList $ map (\v -> (v, V v)) v)
 
 type Assertion = St -> Prop
 
@@ -170,9 +194,6 @@ left, right :: St -> Assertion -> Assertion
 left st0 p = \st1 -> p (Composite st0 st1)
 right st1 p = \st0 -> p (Composite st0 st1)
 
-fork :: Assertion -> Assertion
-fork phi st = phi (Composite st st)
-
 data Ctxt = Ctxt
   { _vocab :: Vocab
   , _theState :: St
@@ -190,17 +211,15 @@ data Triple = Triple Assertion Com Assertion
 
 rel :: M Assertion
 rel = do
-  v <- view vocab
   q <- view quantifiedState
-  let qvs = concatMap (`applyAll` v) q
   c <- id <<+= 1
   pure (\st ->
-    let vs = applyAll st v
-     in Rel c (qvs ++ vs))
+    let es = enumerate (foldr Composite st q)
+     in Rel c es)
   where
-    applyAll :: St -> Vocab -> [Expr]
-    applyAll (Singleton st) v = map (V . st) v
-    applyAll (Composite st0 st1) v = applyAll st0 v ++ applyAll st1 v
+    enumerate :: St -> [Expr]
+    enumerate (Singleton i st) = map (erename i) $ map snd $ M.toList st
+    enumerate (Composite st0 st1) = enumerate st0 ++ enumerate st1
 
 quantify :: Prop -> QProp
 quantify p = Forall (S.toList (pvocab p)) p
@@ -216,19 +235,28 @@ quantify p = Forall (S.toList (pvocab p)) p
      split (Impl p (And q r)) = split (Impl p q) ++ split (Impl p r)
      split p = [p]
 
+(/\) :: Assertion -> Assertion -> Assertion
+(/\) p q = \st -> p st `pand` q st
+
 mkAssertion :: Prop -> Assertion
 mkAssertion p = (\st -> case st of
-  Singleton st -> prename st p
+  Singleton i st -> prename i (plookup st p)
   _ -> undefined)
 
-andE :: Assertion -> Prop -> Assertion
-andE p q = \case
-  Singleton st -> prename st q `pand` p (Singleton st)
-  _ -> undefined
+equiv :: St -> St -> Prop
+equiv (Composite st0 st1) (Composite st2 st3) = equiv st0 st2 `pand` equiv st1 st3
+equiv (Singleton i st0) (Singleton j st1) =
+    foldr (\v p -> eq1 i j st0 st1 v `pand` p) T (M.keys st0)
+  where
+    eq1 i j st0 st1 v =
+      erename i (M.findWithDefault (V v) v st0)
+      `Eql`
+      erename j (M.findWithDefault (V v) v st1)
+
 
 subst :: Var -> Expr -> Assertion -> Assertion
 subst x e p = \case
-  Singleton st -> psubst (st x) (erename st e) (p (Singleton st))
+  Singleton i st -> p (Singleton i (M.map (esubst x e) st))
   _ -> undefined
 
 loopless :: Com -> Bool
@@ -240,8 +268,6 @@ loopless = \case
   Assert{} -> True
   Assign{} -> True
   Skip -> True
-  Fork c -> loopless c
-  Join c -> loopless c
 
 mergeLoops :: Com -> Com
 mergeLoops = \case
@@ -265,18 +291,20 @@ localRight f = do
         . (quantifiedState %~ (st0 :))
         ) (f st0)
 
+
 localDouble :: M a -> M a
 localDouble ac = do
   c <- view stateCount
   st <- view theState
-  let (st', c') = runState (go st) c
+  v <- view vocab
+  let (st', c') = runState (go v st) c
   local ((stateCount .~ c') . (theState .~ (st `Composite` st'))) ac
   where
-    go :: St -> State Int St
-    go (Singleton st) = do
+    go :: Vocab -> St -> State Int St
+    go v (Singleton _ st) = do
       c <- id <<+= 1
-      pure (Singleton (\v -> v ++ "_" ++ show c))
-    go (Composite st0 st1) = Composite <$> go st0 <*> go st1
+      pure (mkSingleton c v)
+    go v (Composite st0 st1) = Composite <$> go v st0 <*> go v st1
 
 localCommute :: M a -> M a
 localCommute ac = do
@@ -289,19 +317,21 @@ localAssociate ac = do
   local (theState .~ ((st0 `Composite` st1) `Composite` st0)) ac
 
 initialCtxt :: Com -> Ctxt
-initialCtxt c = Ctxt 
-  { _vocab = S.toList $ cvocab c
-  , _theState = Singleton (\v -> v ++ "_0")
-  , _stateCount = 1
-  , _quantifiedState = []
-  }
+initialCtxt c =
+  let v =  S.toList $ cvocab c
+  in Ctxt
+     { _vocab = v
+     , _theState = mkSingleton 0 v
+     , _stateCount = 1
+     , _quantifiedState = []
+     }
 
 triple :: Assertion -> Com -> Assertion -> M ()
 triple p c q =
   case mergeLoops c of
     Skip -> p ==> q
     Assign x a -> p ==> (subst x a q)
-    Assert e -> andE p e ==> q
+    Assert e -> p /\ mkAssertion e ==> q
     Seq c0 c1 -> do
       if loopless c0 || loopless c1
       then do
@@ -309,24 +339,18 @@ triple p c q =
         triple p c0 r
         triple r c1 q
       else do
-        (r, s) <- localDouble (do
+        localDouble (do
           r <- rel
           s <- rel
-          triple r (Prod c0 c1) s
-          pure (r, s))
-        triple p (Fork c0) r
-        triple s (Join c1) q
+          q' <- rel
+          localRight (\st0 -> triple (p /\ equiv st0) c0 (left st0 r))
+          post <- localLeft (\st1 -> do
+            triple (right st1 s) c1 (right st1 q')
+            right st1 q' /\ equiv st1 ==> q)
+          triple r (Prod c0 c1) s)
     Sum c0 c1 -> do
       triple p c0 q
       triple p c1 q
-    Fork c -> do
-      r <- rel
-      triple p c (fork q)
-      localDouble (pairwise p r ==> q)
-    Join c -> do
-      r <- rel
-      triple (fork p) c q
-      localDouble (p ==> pairwise r q)
     Loop c -> do
       p ==> q
       triple q c q
@@ -351,12 +375,7 @@ hoare :: Com -> [QProp]
 hoare c =
   let ctx = initialCtxt c
    in execWriter $ evalStateT (runReaderT
-        (do
-          p <- rel
-          q <- rel
-          mkAssertion T ==> p
-          triple p c q
-          q ==> mkAssertion F) ctx) 0
+        (triple (mkAssertion T) c (mkAssertion F)) ctx) 0
 
 showCom :: Com -> String
 showCom = \case
@@ -367,8 +386,6 @@ showCom = \case
   Sum c0 c1 -> "{" ++ showCom c0 ++ "} +\n {" ++ showCom c1 ++ "}"
   Prod c0 c1 -> "{" ++ showCom c0 ++ "} *\n {" ++ showCom c1 ++ "}"
   Loop c -> "LOOP {\n" ++ showCom c ++ "}"
-  Fork c -> "Fork ( " ++ showCom c ++ " )"
-  Join c -> "Join ( " ++ showCom c ++ " )"
 
 sexpr :: [String] -> String
 sexpr ss = "(" ++ unwords ss ++ ")"
@@ -416,8 +433,7 @@ smt2Prop = \case
 example :: Com
 example =
   Assign "x" (ALit 0) `Seq`
-  Assign "x" (Add (ALit 1) (V "x")) `Seq`
-  Assert (Not (Eql (V "x") (ALit 1)))
+  Assert (Not (Eql (V "x") (ALit 0)))
 
 example2 :: Com
 example2 =
@@ -446,7 +462,7 @@ example3 =
     Assign "i1" (Add (V "i1") (ALit 1))
   ) `Seq`
   Assert (Ge (V "i1") (V "n")) `Seq`
-  Assert (Not (Impl (Eql (V "i0") (V "i1")) (Eql (V "s0") (V "s1"))))
+  Assert (Not (Eql (V "s0") (V "s1")))
 
 example4 :: Com
 example4 =

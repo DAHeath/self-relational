@@ -401,12 +401,12 @@ Definition const_r (P:Assertion) : Assertion :=
   end.
 
 Theorem hoare_fork : forall (P Q : Assertion) c,
-  {{P}} c {{Q}} ->
-  {{P}} FORK c {{pairwise P Q}}.
+  (forall st, {{P}} c {{left Q st}}) ->
+  {{P}} FORK c {{Q}}.
 Proof.
   unfold triple; intros.
   inversion H0; subst.
-  econstructor; eauto.
+  eapply H; eauto.
 Qed.
 
 Theorem hoare_join : forall (P Q : Assertion) c,
@@ -419,17 +419,16 @@ Proof.
 Qed.
 
 Theorem hoare_seq : forall (P Q R S : Assertion) c0 c1,
-  {{P}} FORK c0 {{R}} ->
-  {{S}} JOIN c1 {{Q}} ->
+  (forall st, {{P}} c0 {{left R st}}) ->
+  (forall st, {{right S st}} c1 {{Q}}) ->
   {{R}} c0 *** c1 {{S}} ->
   {{P}} c0 ;; c1 {{Q}}.
 Proof.
   unfold triple; intros.
   inversion H2; clear H2; subst.
-  eapply H0. econstructor; eauto.
-  eapply H1. econstructor; eauto.
-  eapply H. econstructor; eauto.
-  eauto.
+  eapply H0; eauto.
+  eapply H1; eauto.
+  eapply H; eauto.
 Qed.
 
 
