@@ -433,7 +433,9 @@ smt2Prop = \case
 example :: Com
 example =
   Assign "x" (ALit 0) `Seq`
-  Assert (Not (Eql (V "x") (ALit 0)))
+  Assign "x" (Add (V "x") (ALit 1)) `Seq`
+  Assign "x" (Add (V "x") (ALit 1)) `Seq`
+  Assert (Not (Eql (V "x") (ALit 2)))
 
 example2 :: Com
 example2 =
