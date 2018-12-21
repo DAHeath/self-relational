@@ -1,20 +1,16 @@
 (set-logic HORN)
 (set-option :fixedpoint.engine "duality")
 
-(declare-fun R0 (Int) Bool)
-(declare-fun R1 (Int) Bool)
-(declare-fun R2 (Int) Bool)
+(declare-fun R0 (Int Int Int) Bool)
 
-(assert (=> true (R2 0)))
+(assert (forall ((n_0 Int))
+   (R0 0 0 n_0)))
 
-(assert (forall ((x_0 Int))
-   (=> (R2 x_0) (R1 (+ x_0 1)))))
+(assert (forall ((a_0 Int) (b_0 Int) (n_0 Int))
+   (=> (and (< b_0 n_0) (R0 a_0 b_0 n_0)) (R0 (+ a_0 (+ b_0 1)) (+ b_0 1) n_0))))
 
-(assert (forall ((x_0 Int))
-   (=> (R1 x_0) (R0 (+ x_0 1)))))
-
-(assert (forall ((x_0 Int))
-   (=> (and (R0 x_0) (not (= x_0 2))) false)))
+(assert (forall ((a_0 Int) (b_0 Int) (n_0 Int))
+   (=> (and (and (< a_0 n_0) (>= b_0 n_0)) (R0 a_0 b_0 n_0)) false)))
 
 
 (check-sat)
