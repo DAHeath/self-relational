@@ -187,12 +187,6 @@ initialEnv c =
      , _quantifiedState = []
      }
 
-data QProp = Forall [Var] Prop
-  deriving (Show, Read, Eq, Ord)
-
-quantify :: Prop -> QProp
-quantify p = Forall (S.toList (pvocab p)) p
-
 data Ctxt = Ctxt
   { _relCount :: Int
   , _stubCount :: Int
@@ -206,51 +200,82 @@ data Assertion
   = ASSIGN Var Expr
   | ASSERT Prop
   | STUB Stub
-  | PRED Pred
   | THEN Assertion Assertion
   | PAIRWISE Assertion Assertion
   | TRUE
   deriving (Show, Read, Eq, Ord)
+
+arename :: Int -> Assertion -> Assertion
+arename t = \case
+  ASSIGN x e -> ASSIGN (vrename t x) (erename t e)
+  ASSERT p -> ASSERT (prename t p)
+  STUB s -> STUB s
+  THEN a0 a1 -> THEN (arename t a0) (arename t a1)
+  PAIRWISE a0 a1 -> PAIRWISE (arename t a0) (arename t a1)
+  TRUE -> TRUE
 
 makeLenses ''Ctxt
 
 initialCtxt :: Ctxt
 initialCtxt = Ctxt 0 0 M.empty
 
-assertion :: St -> Assertion -> M Prop
+assertion :: Assertion -> M Prop
 assertion = go T
   where
-    go p (Singleton t) (ASSIGN x e) = pure $ psubst (vrename t x) (erename t e) p
-    go p (Singleton t) (ASSERT q) = pure $ p `pand` prename t q
-    go p st (STUB n) = (go p st =<< uses stubs (M.findWithDefault TRUE n))
-    go p st (PRED n) = pand p <$> predicate st n
-    go p st (THEN x y) = (\q -> go q st x) =<< go p st y
-    go p (Composite st0 st1) (PAIRWISE x y) = go p st0 x >>= (\q -> go q st1 y)
-    go p _ TRUE = pure p
-    go _ _ _ = undefined
+    go p  (ASSIGN x e) = pure $ psubst x e p
+    go p  (ASSERT q) = pure $ q `pand` p
+    go p (STUB n) = (go p =<< uses stubs (M.findWithDefault TRUE n))
+    go p (THEN x y) = (\q -> go q x) =<< go p y
+    go p  (PAIRWISE x y) = go p x >>= (\q -> go q y)
+    go p TRUE = pure p
 
-assignments :: St -> Assertion -> M (Prop -> Prop)
+assignments :: Assertion -> M (Prop -> Prop)
 assignments = go
   where
-    go (Singleton t) (ASSIGN x e) = pure $ psubst (vrename t x) (erename t e)
-    go (Singleton t) (ASSERT q) = pure id
-    go st (STUB n) = go st =<< uses stubs (M.findWithDefault TRUE n)
-    go st (PRED n) = pure id
-    go st (THEN x y) = do
-      f <- go st y
-      g <- go st x
+    go (ASSIGN x e) = pure $ psubst x e
+    go (ASSERT q) = pure id
+    go (STUB n) = go =<< uses stubs (M.findWithDefault TRUE n)
+    go (THEN x y) = do
+      f <- go y
+      g <- go x
       pure (g . f)
-    go (Composite st0 st1) (PAIRWISE x y) = do
-      f <- go st0 x
-      g <- go st1 y
+    go (PAIRWISE x y) = do
+      f <- go x
+      g <- go y
       pure (g . f)
-    go _ TRUE = pure id
-    go _ _ = undefined
+    go TRUE = pure id
 
-predicate :: St -> Int -> M Prop
-predicate st c = do
+(<=>) :: Assertion -> Stub -> M ()
+(<=>) b i = stubs %= M.insert i b
+
+(==>) :: Assertion -> Prop -> M ()
+(==>) b h = do
+  b' <- assertion b
+  f <- assignments b
+  tell [quantify $ b' `pimpl` f h]
+
+data QProp = Forall [Var] Prop
+  deriving (Show, Read, Eq, Ord)
+
+quantify :: Prop -> QProp
+quantify p = Forall (S.toList (pvocab p)) p
+
+type M a = ReaderT Env (StateT Ctxt (Writer [QProp])) a
+
+token :: M Int
+token = views theState (\case
+  Singleton t -> t
+  _ -> undefined)
+
+stub :: M Stub
+stub = stubCount <<+= 1
+
+pred :: M Prop
+pred = do
+  c <- relCount <<+= 1
   v <- view vocab
   let v' = map V v
+  st <- view theState
   q <- view quantifiedState
   let ts = concatMap flatten (st : q)
   let es = concatMap (\t -> map (erename t) v') ts
@@ -260,25 +285,6 @@ predicate st c = do
       flatten = \case
         Singleton t -> [t]
         Composite st0 st1 -> flatten st0 ++ flatten st1
-
-(<=>) :: Assertion -> Stub -> M ()
-(<=>) b i = stubs %= M.insert i b
-
-(==>) :: Assertion -> Pred -> M ()
-(==>) b c = do
-  st <- view theState
-  b' <- assertion st b
-  f <- assignments st b
-  h' <- predicate st c
-  tell [quantify $ b' `pimpl` f h']
-
-type M a = ReaderT Env (StateT Ctxt (Writer [QProp])) a
-
-stub :: M Stub
-stub = stubCount <<+= 1
-
-pred :: M Pred
-pred = relCount <<+= 1
 
 -- equiv :: Vocab -> St -> St -> Prop
 -- equiv v (Composite st0 st1) (Composite st2 st3) = equiv v st0 st2 `pand` equiv v st1 st3
@@ -297,15 +303,16 @@ associate = local (theState %~ go)
 
 left ac = do
   Composite st0 st1 <- view theState
-  local ( (quantifiedState %~ (st0 :))
-        . (theState .~ st1)
+  local ( (quantifiedState %~ (st1 :))
+        . (theState .~ st0)
         ) ac
 
 right ac = do
   Composite st0 st1 <- view theState
-  local ( (quantifiedState %~ (st1 :))
-        . (theState .~ st0)
+  local ( (quantifiedState %~ (st0 :))
+        . (theState .~ st1)
         ) ac
+
 
 double ac = do
   c <- view stateCount
@@ -320,11 +327,19 @@ double ac = do
     go (Composite st0 st1) = Composite <$> go st0 <*> go st1
 
 triple :: Assertion -> Com -> Stub -> M ()
-triple p c q =
+triple p c q = do
+  st <- view theState
+  traceM $ show st
+  traceM $ showCom c
+  traceM ""
   case mergeLoops c of
     Skip -> p <=> q
-    Assign x a -> THEN p (ASSIGN x a) <=> q
-    Assert e -> THEN p (ASSERT e) <=> q
+    Assign x a -> do
+      t <- token
+      arename t (THEN p (ASSIGN x a)) <=> q
+    Assert e -> do
+      t <- token
+      arename t (THEN p (ASSERT e)) <=> q
     Seq c0 c1 -> do
       if loopless c0 || loopless c1
       then do
@@ -332,17 +347,18 @@ triple p c q =
         triple p c0 r
         triple (STUB r) c1 q
       else do
-        undefined
-        -- v <- view vocab
-        -- localDouble (do
-        --   r <- rel
-        --   s <- rel
-        --   q' <- rel
-        --   localRight (\st0 -> triple (p /\ equiv v st0) c0 (left st0 r))
-        --   post <- localLeft (\st1 -> do
-        --     triple (right st1 s) c1 (right st1 q')
-        --     right st1 q' /\ equiv v st1 ==> q)
-        --   triple r (Prod c0 c1) s)
+        v <- view vocab
+        double (do
+          r <- stub
+          s <- stub
+          left (triple p c0 r)
+          triple (STUB r) (Prod c0 c1) s
+          right (triple (STUB s) c1 q))
+          -- localRight (\st0 -> triple (p /\ equiv v st0) c0 (left st0 r))
+          -- post <- localLeft (\st1 -> do
+          --   triple (right st1 s) c1 (right st1 q')
+          --   right st1 q' /\ equiv v st1 ==> q)
+          -- triple r (Prod c0 c1) s)
     Sum c0 c1 -> do
       q0 <- stub
       q1 <- stub
@@ -351,30 +367,30 @@ triple p c q =
       triple p c1 q1
       STUB q0 ==> r
       STUB q1 ==> r
-      PRED r <=> q
+      ASSERT r <=> q
     Loop c -> do
       r <- pred
       s <- stub
       p ==> r
-      triple (PRED r) c s
+      triple (ASSERT r) c s
       (STUB s) ==> r
-      (PRED r) <=> q
-    -- Prod c0 c1 ->
-    --   if loopless c0 || loopless c1
-    --   then do
-    --     r <- rel
-    --     localLeft (\st1 -> triple (right st1 p) c0 (right st1 r))
-    --     localRight (\st0 -> triple (left st0 r) c1 (left st0 q))
-    --   else
-    --     case c1 of
-    --       Sum c1' c1'' -> triple p (Sum (Prod c0 c1') (Prod c0 c1'')) q
-    --       Prod c1' c1'' -> localAssociate (triple (associate p) (Prod (Prod c0 c1') c1'') (associate q))
-    --       Loop c1' -> localCommute (triple (commute p) (Prod (Loop c1') c0) (commute q))
-    --       Seq c1' c1'' ->
-    --         if loopless c1'
-    --         then triple p (Seq (Prod Skip c1') (Prod c0 c1'')) q
-    --         else triple p (Seq (Prod c0 c1') (Prod Skip c1'')) q
-    --       _ -> error ("Some impossible state has been reached: `" ++ showCom c ++ "`.")
+      ASSERT r <=> q
+    Prod c0 c1 ->
+      if loopless c0 || loopless c1
+      then do
+        r <- stub
+        left (triple p c0 r)
+        right (triple (STUB r) c1 q)
+      else
+        case c1 of
+          Sum c1' c1'' -> triple p (Sum (Prod c0 c1') (Prod c0 c1'')) q
+          Prod c1' c1'' -> associate (triple p (Prod (Prod c0 c1') c1'') q)
+          Loop c1' -> commute (triple p (Prod (Loop c1') c0) q)
+          Seq c1' c1'' ->
+            if loopless c1'
+            then triple p (Seq (Prod Skip c1') (Prod c0 c1'')) q
+            else triple p (Seq (Prod c0 c1') (Prod Skip c1'')) q
+          _ -> error ("Some impossible state has been reached: `" ++ showCom c ++ "`.")
 
 hoare :: Com -> [QProp]
 hoare c =
@@ -383,9 +399,8 @@ hoare c =
         (do
           q <- stub
           triple TRUE c q
-          q' <- join $ assertion <$> view theState <*> pure (STUB q)
+          q' <- assertion (STUB q)
           st <- use stubs
-          traceM $ show st
           tell [quantify $ q' `pimpl` F]) ctx) initialCtxt
 
 showCom :: Com -> String
@@ -434,12 +449,16 @@ smt2Prop = \case
   T -> "true"
   F -> "false"
   Not p -> sexpr ["not", smt2Prop p]
-  And p0 p1 -> sexpr ["and", smt2Prop p0, smt2Prop p1]
+  And p0 p1 -> sexpr ("and" : map smt2Prop (conjuncts p0 ++ conjuncts p1))
   Impl p0 p1 -> sexpr ["=>", smt2Prop p0, smt2Prop p1]
   Eql e0 e1 -> sexpr ["=", smt2Expr e0, smt2Expr e1]
   Lt e0 e1 -> sexpr ["<", smt2Expr e0, smt2Expr e1]
   Ge e0 e1 -> sexpr [">=", smt2Expr e0, smt2Expr e1]
   Rel i es -> sexpr (("R" ++ show i) : map smt2Expr es)
+  where
+    conjuncts :: Prop -> [Prop]
+    conjuncts (And p0 p1) = conjuncts p0 ++ conjuncts p1
+    conjuncts p = [p]
 
 example :: Com
 example =
