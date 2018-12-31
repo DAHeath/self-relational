@@ -33,10 +33,13 @@ esubst x e = \case
   where
     go = esubst x e
 
+vrename :: Int -> Var -> Var
+vrename c v = v ++ "_" ++ show c
+
 erename :: Int -> Expr -> Expr
 erename c = \case
   ALit i -> ALit i
-  V v -> V (v ++ "_" ++ show c)
+  V v -> V (vrename c v)
   Add a0 a1 -> Add (erename c a0) (erename c a1)
 
 elookup :: (Map Var Expr) -> Expr -> Expr
@@ -65,6 +68,13 @@ data Prop
   | Ge Expr Expr
   | Rel ID [Expr]
   deriving (Show, Read, Eq, Ord)
+
+(/\) :: Prop -> Prop -> Prop
+(/\) T p = p
+(/\) p T = p
+(/\) F _ = F
+(/\) _ F = F
+(/\) p q = p `And` q
 
 psubst :: Var -> Expr -> Prop -> Prop
 psubst x e = \case
@@ -154,100 +164,6 @@ cvocab = \case
   Prod c0 c1 -> cvocab c0 `S.union` cvocab c1
   Loop c -> cvocab c
 
-
-data St = Singleton Int (Map Var Expr) | Composite St St
-type Vocab = [Var]
-
-mkSingleton :: Int -> Vocab -> St
-mkSingleton i v =
-  Singleton i (M.fromList $ map (\v -> (v, V v)) v)
-
-type Assertion = St -> Prop
-
--- | Commute the assertion: That is, swap how the assertion is applied to the
--- VarChange.
-commute :: Assertion -> Assertion
-commute p (Composite st1 st0) = p (Composite st0 st1)
-commute _ _ = undefined
-
--- | Associate the assertion: That is, rotate how the assertion is applied to the
--- VarChange.
-associate :: Assertion -> Assertion
-associate p (Composite (Composite s0 s1) s2) = p (Composite s0 (Composite s1 s2))
-associate _ _ = undefined
-
-pand :: Prop -> Prop -> Prop
-pand T p = p
-pand p T = p
-pand F _ = F
-pand _ F = F
-pand p q = p `And` q
-
-mkImpl :: Assertion -> Assertion -> Assertion
-mkImpl p0 p1 = \st -> p0 st `Impl` p1 st
-
-pairwise :: Assertion -> Assertion -> Assertion
-pairwise p0 p1 (Composite st0 st1) = p0 st0 `And` p1 st1
-pairwise _ _ _ = undefined
-
-left, right :: St -> Assertion -> Assertion
-left st0 p = \st1 -> p (Composite st0 st1)
-right st1 p = \st0 -> p (Composite st0 st1)
-
-data Ctxt = Ctxt
-  { _vocab :: Vocab
-  , _theState :: St
-  , _stateCount :: Int
-  , _quantifiedState :: [St]
-  }
-makeLenses ''Ctxt
-
-data QProp = Forall [Var] Prop
-  deriving (Show, Read, Eq, Ord)
-
-type M a = ReaderT Ctxt (StateT Int (Writer [QProp])) a
-
-data Triple = Triple Assertion Com Assertion
-
-rel :: M Assertion
-rel = do
-  q <- view quantifiedState
-  c <- id <<+= 1
-  pure (\st ->
-    let es = enumerate (foldr Composite st q)
-     in Rel c es)
-  where
-    enumerate :: St -> [Expr]
-    enumerate (Singleton i st) = map (erename i) $ map snd $ M.toList st
-    enumerate (Composite st0 st1) = enumerate st0 ++ enumerate st1
-
-quantify :: Prop -> QProp
-quantify p = Forall (S.toList (pvocab p)) p
-
-(==>) :: Assertion -> Assertion -> M ()
-(==>) a0 a1 = do
-  st <- view theState
-  let p = mkImpl a0 a1 st
-  let ps = split p
-  tell (map quantify ps)
-   where
-     split :: Prop -> [Prop]
-     split (Impl p (And q r)) = split (Impl p q) ++ split (Impl p r)
-     split p = [p]
-
-(/\) :: Assertion -> Assertion -> Assertion
-(/\) p q = \st -> p st `pand` q st
-
-mkAssertion :: Prop -> Assertion
-mkAssertion p = (\st -> case st of
-  Singleton i st -> prename i (plookup st p)
-  _ -> undefined)
-
-subst :: Var -> Expr -> Assertion -> Assertion
-subst x e p = \case
-  Singleton i st -> p (Singleton i (M.map (esubst x e) st))
-  _ -> undefined
-
 loopless :: Com -> Bool
 loopless = \case
   Loop{} -> False
@@ -268,115 +184,149 @@ mergeLoops = \case
          _ -> Prod c0' c1'
   c -> c
 
-localLeft, localRight :: (St -> M a) -> M a
-localLeft f = do
-  (Composite st0 st1) <- view theState
-  local ( (theState .~ st0)
-        . (quantifiedState %~ (st1 :))
-        ) (f st1)
-localRight f = do
-  (Composite st0 st1) <- view theState
-  local ( (theState .~ st1)
-        . (quantifiedState %~ (st0 :))
-        ) (f st0)
+data St = Singleton Int | Composite St St
+  deriving (Show, Read, Eq, Ord)
+type Vocab = [Var]
 
-equiv :: St -> St -> Prop
-equiv (Composite st0 st1) (Composite st2 st3) = equiv st0 st2 `pand` equiv st1 st3
-equiv (Singleton i st0) (Singleton j st1) =
-    foldr (\v p -> eq1 i j st0 st1 v `pand` p) T (M.keys st0)
-      where
-    eq1 i j st0 st1 v =
-      erename i (M.findWithDefault (V v) v st0)
-      `Eql`
-      erename j (M.findWithDefault (V v) v st1)
+data Env = Env
+  { _vocab :: Vocab
+  , _theState :: St
+  , _stateCount :: Int
+  } deriving (Show, Read, Eq, Ord)
 
-localDouble :: M a -> M a
-localDouble ac = do
-  c <- view stateCount
-  st <- view theState
-  v <- view vocab
-  let (st', c') = runState (go v st) c
-  local ((stateCount .~ c') . (theState .~ (st `Composite` st'))) ac
-  where
-    go :: Vocab -> St -> State Int St
-    go v (Singleton _ st) = do
-      c <- id <<+= 1
-      pure (mkSingleton c v)
-    go v (Composite st0 st1) = Composite <$> go v st0 <*> go v st1
-
-localCopy :: M a -> M a
-localCopy = local (theState %~ (\st -> st `Composite` st))
-
-localCommute :: M a -> M a
-localCommute ac = do
-  (st0 `Composite` st1) <- view theState
-  local (theState .~ (st1 `Composite` st0)) ac
-
-localAssociate :: M a -> M a
-localAssociate ac = do
-  (st0 `Composite` (st1 `Composite` st2)) <- view theState
-  local (theState .~ ((st0 `Composite` st1) `Composite` st0)) ac
-
-initialCtxt :: Com -> Ctxt
-initialCtxt c =
+initialEnv :: Com -> Env
+initialEnv c =
   let v =  S.toList $ cvocab c
-  in Ctxt
+  in Env
      { _vocab = v
-     , _theState = mkSingleton 0 v
+     , _theState = Singleton 0
      , _stateCount = 1
-     , _quantifiedState = []
      }
 
-triple :: Assertion -> Com -> Assertion -> M ()
-triple p c q =
+data Ctxt = Ctxt
+  { _relCount :: Int
+  , _temporaryCount :: Int
+  } deriving (Show, Read, Eq, Ord)
+
+initialCtxt :: Ctxt
+initialCtxt = Ctxt 0 0
+
+makeLenses ''Env
+makeLenses ''Ctxt
+
+data QProp = Forall [Var] Prop
+  deriving (Show, Read, Eq, Ord)
+
+type M a = ReaderT Env (StateT Ctxt (Writer [QProp])) a
+
+commute, associate, left, right :: M a -> M a
+commute = local (theState %~ \(Composite st0 st1) -> Composite st1 st0)
+associate = local (theState %~
+  \(Composite st0 (Composite st1 st2)) -> Composite (Composite st0 st1) st2)
+left = local (theState %~ \(Composite st0 _) -> st0)
+right = local (theState %~ \(Composite _ st1) -> st1)
+
+rel :: M Prop
+rel = do
+  count <- view stateCount
+  v <- view vocab
+  c <- relCount <<+= 1
+  let es = concatMap (\i -> map (erename i . V) v) [0..count-1]
+  pure (Rel c es)
+
+temporary :: M Var
+temporary = do
+  c <- temporaryCount <<+= 1
+  pure ("V" ++ show c)
+
+quantify :: Prop -> QProp
+quantify p = Forall (S.toList (pvocab p)) p
+
+(==>) :: Prop -> Prop -> M ()
+(==>) p q = tell [quantify (p `Impl` q)]
+
+equiv :: St -> St -> M Prop
+equiv (Composite st0 st1) (Composite st2 st3) = (/\) <$> equiv st0 st2 <*> equiv st1 st3
+equiv (Singleton i) (Singleton j) = do
+  voc <- view vocab
+  pure (foldr (\v p -> eq1 i j (V v) /\ p) T voc)
+  where eq1 i j v = erename i v `Eql` erename j v
+
+double :: M a -> M a
+double ac = do
+  c <- view stateCount
+  st <- view theState
+  let (st', c') = runState (go st) c
+  local ((stateCount .~ c') . (theState .~ (st `Composite` st'))) ac
+  where
+    go :: St -> State Int St
+    go (Singleton _) = do
+      c <- id <<+= 1
+      pure (Singleton c)
+    go (Composite st0 st1) = Composite <$> go st0 <*> go st1
+
+triple :: Com -> Prop -> M Prop
+triple c p =
   case mergeLoops c of
-    Skip -> p ==> q
-    Assign x a -> p ==> (subst x a q)
-    Assert e -> p /\ mkAssertion e ==> q
+    Skip -> pure p
+    Assign x a -> do
+      t <- temporary
+      Singleton st <- view theState
+      let x' = vrename st x
+      pure $ psubst x' (V t) p /\ (Eql (V x') (esubst x' (V t) (erename st a)))
+    Assert e -> do
+      Singleton st <- view theState
+      pure (p /\ (prename st e))
     Seq c0 c1 -> do
       if loopless c0 || loopless c1
       then do
-        r <- rel
-        triple p c0 r
-        triple r c1 q
-      else do
-        localDouble (do
-          r <- rel
-          s <- rel
-          q' <- rel
-          triple (\(Composite st0 st1) -> p st1 `pand` equiv st0 st1) (Prod Skip c0) r
-          triple r (Prod c0 c1) s
-          triple s (Prod c1 Skip) q'
-          (\(Composite st0 st1) -> q' (Composite st0 st1) `pand` equiv st0 st1) ==>
-            (\(Composite st0 st1) -> q st0))
+        triple c0 p >>= triple c1
+      else
+        double (do
+          Composite st0 st1 <- view theState
+          eq <- equiv st0 st1
+          q' <- triple (Prod Skip c0) (p /\ eq)
+                >>= triple (Prod c0 c1)
+                >>= triple (Prod c1 Skip)
+          q <- rel
+          q' /\ eq ==> q
+          pure q)
     Sum c0 c1 -> do
-      triple p c0 q
-      triple p c1 q
+      q0 <- triple c0 p
+      q1 <- triple c1 p
+      q <- rel
+      q0 ==> q
+      q1 ==> q
+      pure q
     Loop c -> do
-      p ==> q
-      triple q c q
+      r <- rel
+      p ==> r
+      q <- triple c r
+      q ==> r
+      pure r
     Prod c0 c1 ->
       if loopless c0 || loopless c1
       then do
-        r <- rel
-        localLeft (\st1 -> triple (right st1 p) c0 (right st1 r))
-        localRight (\st0 -> triple (left st0 r) c1 (left st0 q))
+        r <- left (triple c0 p)
+        right (triple c1 r)
       else
         case c1 of
-          Sum c1' c1'' -> triple p (Sum (Prod c0 c1') (Prod c0 c1'')) q
-          Prod c1' c1'' -> triple (associate p) (Prod (Prod c0 c1') c1'') (associate q)
-          Loop c1' -> triple (commute p) (Prod (Loop c1') c0) (commute q)
+          Sum c1' c1'' -> triple (Sum (Prod c0 c1') (Prod c0 c1'')) p
+          Prod c1' c1'' -> associate (triple (Prod (Prod c0 c1') c1'') p)
+          Loop c1' -> commute (triple (Prod (Loop c1') c0) p)
           Seq c1' c1'' ->
             if loopless c1'
-            then triple p (Seq (Prod Skip c1') (Prod c0 c1'')) q
-            else triple p (Seq (Prod c0 c1') (Prod Skip c1'')) q
+            then triple (Seq (Prod Skip c1') (Prod c0 c1'')) p
+            else triple (Seq (Prod c0 c1') (Prod Skip c1'')) p
           _ -> error ("Some impossible state has been reached: `" ++ showCom c ++ "`.")
 
 hoare :: Com -> [QProp]
 hoare c =
-  let ctx = initialCtxt c
+  let ctx = initialEnv c
    in execWriter $ evalStateT (runReaderT
-        (triple (mkAssertion T) c (mkAssertion F)) ctx) 0
+        (do
+          q <- triple c T
+          q ==> F) ctx) initialCtxt
 
 showCom :: Com -> String
 showCom = \case
@@ -424,19 +374,23 @@ smt2Prop = \case
   T -> "true"
   F -> "false"
   Not p -> sexpr ["not", smt2Prop p]
-  And p0 p1 -> sexpr ["and", smt2Prop p0, smt2Prop p1]
+  And p0 p1 -> sexpr ("and" : map smt2Prop (conjuncts p0 ++ conjuncts p1))
   Impl p0 p1 -> sexpr ["=>", smt2Prop p0, smt2Prop p1]
   Eql e0 e1 -> sexpr ["=", smt2Expr e0, smt2Expr e1]
   Lt e0 e1 -> sexpr ["<", smt2Expr e0, smt2Expr e1]
   Ge e0 e1 -> sexpr [">=", smt2Expr e0, smt2Expr e1]
   Rel i es -> sexpr (("R" ++ show i) : map smt2Expr es)
+  where
+    conjuncts :: Prop -> [Prop]
+    conjuncts (And p0 p1) = conjuncts p0 ++ conjuncts p1
+    conjuncts p = [p]
 
 example :: Com
 example =
   Assign "x" (ALit 0) `Seq`
+  Assign "x" (Add (V "x") (ALit 1)) `Seq`
   -- Assign "x" (Add (V "x") (ALit 1)) `Seq`
-  -- Assign "x" (Add (V "x") (ALit 1)) `Seq`
-  Assert (Not (Eql (V "x") (ALit 0)))
+  Assert (Not (Eql (V "x") (ALit 1)))
 
 example2 :: Com
 example2 =
