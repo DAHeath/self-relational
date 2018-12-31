@@ -243,17 +243,6 @@ mkAssertion p = (\st -> case st of
   Singleton i st -> prename i (plookup st p)
   _ -> undefined)
 
-equiv :: St -> St -> Prop
-equiv (Composite st0 st1) (Composite st2 st3) = equiv st0 st2 `pand` equiv st1 st3
-equiv (Singleton i st0) (Singleton j st1) =
-    foldr (\v p -> eq1 i j st0 st1 v `pand` p) T (M.keys st0)
-  where
-    eq1 i j st0 st1 v =
-      erename i (M.findWithDefault (V v) v st0)
-      `Eql`
-      erename j (M.findWithDefault (V v) v st1)
-
-
 subst :: Var -> Expr -> Assertion -> Assertion
 subst x e p = \case
   Singleton i st -> p (Singleton i (M.map (esubst x e) st))
@@ -291,6 +280,15 @@ localRight f = do
         . (quantifiedState %~ (st0 :))
         ) (f st0)
 
+equiv :: St -> St -> Prop
+equiv (Composite st0 st1) (Composite st2 st3) = equiv st0 st2 `pand` equiv st1 st3
+equiv (Singleton i st0) (Singleton j st1) =
+    foldr (\v p -> eq1 i j st0 st1 v `pand` p) T (M.keys st0)
+      where
+    eq1 i j st0 st1 v =
+      erename i (M.findWithDefault (V v) v st0)
+      `Eql`
+      erename j (M.findWithDefault (V v) v st1)
 
 localDouble :: M a -> M a
 localDouble ac = do
@@ -305,6 +303,9 @@ localDouble ac = do
       c <- id <<+= 1
       pure (mkSingleton c v)
     go v (Composite st0 st1) = Composite <$> go v st0 <*> go v st1
+
+localCopy :: M a -> M a
+localCopy = local (theState %~ (\st -> st `Composite` st))
 
 localCommute :: M a -> M a
 localCommute ac = do
@@ -343,11 +344,11 @@ triple p c q =
           r <- rel
           s <- rel
           q' <- rel
-          localRight (\st0 -> triple (p /\ equiv st0) c0 (left st0 r))
-          post <- localLeft (\st1 -> do
-            triple (right st1 s) c1 (right st1 q')
-            right st1 q' /\ equiv st1 ==> q)
-          triple r (Prod c0 c1) s)
+          triple (\(Composite st0 st1) -> p st1 `pand` equiv st0 st1) (Prod Skip c0) r
+          triple r (Prod c0 c1) s
+          triple s (Prod c1 Skip) q'
+          (\(Composite st0 st1) -> q' (Composite st0 st1) `pand` equiv st0 st1) ==>
+            (\(Composite st0 st1) -> q st0))
     Sum c0 c1 -> do
       triple p c0 q
       triple p c1 q
@@ -363,8 +364,8 @@ triple p c q =
       else
         case c1 of
           Sum c1' c1'' -> triple p (Sum (Prod c0 c1') (Prod c0 c1'')) q
-          Prod c1' c1'' -> localAssociate (triple (associate p) (Prod (Prod c0 c1') c1'') (associate q))
-          Loop c1' -> localCommute (triple (commute p) (Prod (Loop c1') c0) (commute q))
+          Prod c1' c1'' -> triple (associate p) (Prod (Prod c0 c1') c1'') (associate q)
+          Loop c1' -> triple (commute p) (Prod (Loop c1') c0) (commute q)
           Seq c1' c1'' ->
             if loopless c1'
             then triple p (Seq (Prod Skip c1') (Prod c0 c1'')) q
@@ -433,9 +434,9 @@ smt2Prop = \case
 example :: Com
 example =
   Assign "x" (ALit 0) `Seq`
-  Assign "x" (Add (V "x") (ALit 1)) `Seq`
-  Assign "x" (Add (V "x") (ALit 1)) `Seq`
-  Assert (Not (Eql (V "x") (ALit 2)))
+  -- Assign "x" (Add (V "x") (ALit 1)) `Seq`
+  -- Assign "x" (Add (V "x") (ALit 1)) `Seq`
+  Assert (Not (Eql (V "x") (ALit 0)))
 
 example2 :: Com
 example2 =
