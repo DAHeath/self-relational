@@ -13,6 +13,7 @@ import qualified Data.Set as S
 import           Data.Set (Set)
 import qualified Data.Map as M
 import           Data.Map (Map)
+import           Data.List (intercalate)
 
 import Debug.Trace
 
@@ -149,7 +150,7 @@ data Com
   | Assert Prop
   | Skip
   | Seq Com Com
-  | Sum Com Com
+  | Sum [Com]
   | Prod Com Com
   | Loop Com
   deriving (Show, Read, Eq, Ord)
@@ -160,19 +161,29 @@ cvocab = \case
   Assert p -> pvocab p
   Skip -> S.empty
   Seq c0 c1 -> cvocab c0 `S.union` cvocab c1
-  Sum c0 c1 -> cvocab c0 `S.union` cvocab c1
+  Sum cs -> foldMap cvocab cs
   Prod c0 c1 -> cvocab c0 `S.union` cvocab c1
   Loop c -> cvocab c
 
 loopless :: Com -> Bool
 loopless = \case
   Loop{} -> False
-  Sum c0 c1 -> loopless c0 && loopless c1
+  Sum cs -> all loopless cs
   Prod c0 c1 -> loopless c0 && loopless c1
   Seq c0 c1 -> loopless c0 && loopless c1
   Assert{} -> True
   Assign{} -> True
   Skip -> True
+
+looplessStart :: Com -> Bool
+looplessStart = \case
+  Seq c0 _ -> looplessStart c0
+  c -> loopless c
+
+looplessEnd :: Com -> Bool
+looplessEnd = \case
+  Seq _ c1 -> looplessEnd c1
+  c -> loopless c
 
 mergeLoops :: Com -> Com
 mergeLoops = \case
@@ -180,7 +191,12 @@ mergeLoops = \case
     let c0' = mergeLoops c0
         c1' = mergeLoops c1
     in case (c0', c1') of
-         (Loop c0, Loop c1) -> Loop (Prod (Sum c0 Skip) (Sum c1 Skip))
+         (Loop c0, Loop c1) ->
+           Loop (
+             Sum [ Prod c0 c1
+                 , Prod c0 Skip
+                 , Prod Skip c1
+                 ])
          _ -> Prod c0' c1'
   c -> c
 
@@ -191,7 +207,7 @@ type Vocab = [Var]
 data Env = Env
   { _vocab :: Vocab
   , _theState :: St
-  , _stateCount :: Int
+  , _activeState :: [Int]
   } deriving (Show, Read, Eq, Ord)
 
 initialEnv :: Com -> Env
@@ -200,16 +216,17 @@ initialEnv c =
   in Env
      { _vocab = v
      , _theState = Singleton 0
-     , _stateCount = 1
+     , _activeState = [0]
      }
 
 data Ctxt = Ctxt
   { _relCount :: Int
   , _temporaryCount :: Int
+  , _stateCount :: Int
   } deriving (Show, Read, Eq, Ord)
 
 initialCtxt :: Ctxt
-initialCtxt = Ctxt 0 0
+initialCtxt = Ctxt 0 0 1
 
 makeLenses ''Env
 makeLenses ''Ctxt
@@ -228,10 +245,10 @@ right = local (theState %~ \(Composite _ st1) -> st1)
 
 rel :: M Prop
 rel = do
-  count <- view stateCount
+  act <- view activeState
   v <- view vocab
   c <- relCount <<+= 1
-  let es = concatMap (\i -> map (erename i . V) v) [0..count-1]
+  let es = concatMap (\i -> map (erename i . V) v) act
   pure (Rel c es)
 
 temporary :: M Var
@@ -254,16 +271,20 @@ equiv (Singleton i) (Singleton j) = do
 
 double :: M a -> M a
 double ac = do
-  c <- view stateCount
   st <- view theState
-  let (st', c') = runState (go st) c
-  local ((stateCount .~ c') . (theState .~ (st `Composite` st'))) ac
+  st' <- go st
+  local ( (activeState <>~ flatten st')
+        . (theState .~ (st `Composite` st'))
+        ) ac
   where
-    go :: St -> State Int St
+    go :: St -> M St
     go (Singleton _) = do
-      c <- id <<+= 1
+      c <- stateCount <<+= 1
       pure (Singleton c)
     go (Composite st0 st1) = Composite <$> go st0 <*> go st1
+    flatten :: St -> [Int]
+    flatten (Singleton c) = [c]
+    flatten (Composite st0 st1) = flatten st0 ++ flatten st1
 
 triple :: Com -> Prop -> M Prop
 triple c p =
@@ -277,26 +298,27 @@ triple c p =
     Assert e -> do
       Singleton st <- view theState
       pure (p /\ (prename st e))
-    Seq c0 c1 -> do
-      if loopless c0 || loopless c1
-      then do
-        triple c0 p >>= triple c1
-      else
-        double (do
-          Composite st0 st1 <- view theState
-          eq <- equiv st0 st1
-          q' <- triple (Prod Skip c0) (p /\ eq)
-                >>= triple (Prod c0 c1)
-                >>= triple (Prod c1 Skip)
-          q <- rel
-          q' /\ eq ==> q
-          pure q)
-    Sum c0 c1 -> do
-      q0 <- triple c0 p
-      q1 <- triple c1 p
+    Seq c0 c1 ->
+      if | looplessStart c0 ->
+            case c0 of
+              Seq c0' c0'' -> triple (Seq c0' (Seq c0'' c1)) p
+              c -> triple c0 p >>= triple c1
+         | looplessEnd c1 ->
+            case c1 of
+              Seq c1' c1'' -> triple (Seq (Seq c0 c1') c1'') p
+              c -> triple c0 p >>= triple c1
+         | otherwise ->
+            double (do
+              Composite st0 st1 <- view theState
+              eq <- equiv st0 st1
+              q <- triple (Prod Skip c0) (p /\ eq)
+                    >>= triple (Prod c0 c1)
+                    >>= triple (Prod c1 Skip)
+              pure (q /\ eq))
+    Sum cs -> do
+      qs <- traverse (`triple` p) cs
       q <- rel
-      q0 ==> q
-      q1 ==> q
+      traverse (==> q) qs
       pure q
     Loop c -> do
       r <- rel
@@ -304,21 +326,23 @@ triple c p =
       q <- triple c r
       q ==> r
       pure r
-    Prod c0 c1 ->
-      if loopless c0 || loopless c1
-      then do
-        r <- left (triple c0 p)
-        right (triple c1 r)
-      else
-        case c1 of
-          Sum c1' c1'' -> triple (Sum (Prod c0 c1') (Prod c0 c1'')) p
-          Prod c1' c1'' -> associate (triple (Prod (Prod c0 c1') c1'') p)
-          Loop c1' -> commute (triple (Prod (Loop c1') c0) p)
-          Seq c1' c1'' ->
-            if loopless c1'
-            then triple (Seq (Prod Skip c1') (Prod c0 c1'')) p
-            else triple (Seq (Prod c0 c1') (Prod Skip c1'')) p
-          _ -> error ("Some impossible state has been reached: `" ++ showCom c ++ "`.")
+    Prod c0 c1 -> case c1 of
+      -- Sum c1' c1'' -> triple (Sum (Prod c0 c1') (Prod c0 c1'')) p
+      _ ->
+        if loopless c0 || loopless c1
+        then do
+          r <- left (triple c0 p)
+          right (triple c1 r)
+        else
+          case c1 of
+            -- Sum c1' c1'' -> triple (Sum (Prod c0 c1') (Prod c0 c1'')) p
+            Prod c1' c1'' -> associate (triple (Prod (Prod c0 c1') c1'') p)
+            Loop c1' -> commute (triple (Prod (Loop c1') c0) p)
+            Seq c1' c1'' ->
+              if loopless c1'
+              then triple (Seq (Prod Skip c1') (Prod c0 c1'')) p
+              else triple (Seq (Prod c0 c1') (Prod Skip c1'')) p
+            _ -> error ("Some impossible state has been reached: `" ++ showCom c ++ "`.")
 
 hoare :: Com -> [QProp]
 hoare c =
@@ -334,7 +358,7 @@ showCom = \case
   Assign v e -> v ++ " := " ++ smt2Expr e
   Assert e -> "assert " ++ smt2Prop e
   Seq c0 c1 -> showCom c0 ++ ";\n" ++ showCom c1
-  Sum c0 c1 -> "{" ++ showCom c0 ++ "} +\n {" ++ showCom c1 ++ "}"
+  Sum cs -> "{" ++ (intercalate "} +\n {" (map showCom cs) ) ++ "}"
   Prod c0 c1 -> "{" ++ showCom c0 ++ "} *\n {" ++ showCom c1 ++ "}"
   Loop c -> "LOOP {\n" ++ showCom c ++ "}"
 
@@ -394,9 +418,9 @@ example =
 
 example2 :: Com
 example2 =
-  Sum
-    (Assign "x" (ALit 0))
-    (Assign "x" (ALit 1))
+  Sum [ Assign "x" (ALit 0)
+      , Assign "x" (ALit 1)
+      ]
   `Seq`
   Assert (Lt (V "x") (ALit 0))
 
@@ -419,7 +443,7 @@ example3 =
     Assign "i1" (Add (V "i1") (ALit 1))
   ) `Seq`
   Assert (Ge (V "i1") (V "n")) `Seq`
-  Assert (Not (Eql (V "s0") (V "s1")))
+  Assert (Not (Impl (Eql (V "i0") (V "i1")) (Eql (V "s0") (V "s1"))))
 
 example4 :: Com
 example4 =
