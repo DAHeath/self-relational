@@ -150,6 +150,7 @@ data Com
   | Assert Prop
   | Skip
   | Seq Com Com
+  | If Prop Com Com
   | Sum Com Com
   | Prod Com Com
   | While [(Prop, Com)]
@@ -161,6 +162,7 @@ cvocab = \case
   Assert p -> pvocab p
   Skip -> S.empty
   Seq c0 c1 -> cvocab c0 `S.union` cvocab c1
+  If p c0 c1 -> pvocab p `S.union` cvocab c0 `S.union` cvocab c1
   Sum c0 c1 -> cvocab c0 `S.union` cvocab c1
   Prod c0 c1 -> cvocab c0 `S.union` cvocab c1
   While bodies -> foldMap (\(b, c) -> pvocab b `S.union` cvocab c) bodies
@@ -168,6 +170,7 @@ cvocab = \case
 loopless :: Com -> Bool
 loopless = \case
   While{} -> False
+  If _ c0 c1 -> loopless c0 && loopless c1
   Sum c0 c1 -> loopless c0 && loopless c1
   Prod c0 c1 -> loopless c0 && loopless c1
   Seq c0 c1 -> loopless c0 && loopless c1
@@ -314,6 +317,8 @@ triple c p =
                     >>= triple (Prod c0 c1)
                     >>= triple (Prod c1 Skip)
               pure (q /\ eq))
+    If b c0 c1 ->
+      triple (Sum (Seq (Assert b) c0) (Seq (Assert (Not b)) c1)) p
     Sum c0 c1 -> do
       q0 <- triple c0 p
       q1 <- triple c1 p
@@ -335,6 +340,8 @@ triple c p =
         right (triple c1 r)
       else
         case c1 of
+          If b c1' c1'' ->
+            triple (Prod c0 (Sum (Seq (Assert b) c1') (Seq (Assert (Not b)) c1''))) p
           Sum c1' c1'' -> triple (Sum (Prod c0 c1') (Prod c0 c1'')) p
           Prod c1' c1'' -> associate (triple (Prod (Prod c0 c1') c1'') p)
           While c1' -> commute (triple (Prod (While c1') c0) p)
@@ -421,11 +428,10 @@ example =
 
 example2 :: Com
 example2 =
-  Sum (Assign "x" (ALit 0))
-      (Assign "x" (ALit 1))
-  `Seq`
+  If (Eql (V "x") (ALit 0))
+     (Assign "x" (ALit 0))
+     (Assign "x" (ALit 1)) `Seq`
   Assert (Lt (V "x") (ALit 0))
-
 
 example3 :: Com
 example3 =
