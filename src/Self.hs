@@ -150,7 +150,7 @@ data Com
   | Assert Prop
   | Skip
   | Seq Com Com
-  | Sum [Com]
+  | Sum Com Com
   | Prod Com Com
   | Loop Com
   deriving (Show, Read, Eq, Ord)
@@ -161,14 +161,14 @@ cvocab = \case
   Assert p -> pvocab p
   Skip -> S.empty
   Seq c0 c1 -> cvocab c0 `S.union` cvocab c1
-  Sum cs -> foldMap cvocab cs
+  Sum c0 c1 -> cvocab c0 `S.union` cvocab c1
   Prod c0 c1 -> cvocab c0 `S.union` cvocab c1
   Loop c -> cvocab c
 
 loopless :: Com -> Bool
 loopless = \case
   Loop{} -> False
-  Sum cs -> all loopless cs
+  Sum c0 c1 -> loopless c0 && loopless c1
   Prod c0 c1 -> loopless c0 && loopless c1
   Seq c0 c1 -> loopless c0 && loopless c1
   Assert{} -> True
@@ -315,10 +315,12 @@ triple c p =
                     >>= triple (Prod c0 c1)
                     >>= triple (Prod c1 Skip)
               pure (q /\ eq))
-    Sum cs -> do
-      qs <- traverse (`triple` p) cs
+    Sum c0 c1 -> do
+      q0 <- triple c0 p
+      q1 <- triple c1 p
       q <- rel
-      traverse (==> q) qs
+      q0 ==> q
+      q1 ==> q
       pure q
     Loop c -> do
       r <- rel
@@ -326,23 +328,21 @@ triple c p =
       q <- triple c r
       q ==> r
       pure r
-    Prod c0 c1 -> case c1 of
-      -- Sum c1' c1'' -> triple (Sum (Prod c0 c1') (Prod c0 c1'')) p
-      _ ->
-        if loopless c0 || loopless c1
-        then do
-          r <- left (triple c0 p)
-          right (triple c1 r)
-        else
-          case c1 of
-            -- Sum c1' c1'' -> triple (Sum (Prod c0 c1') (Prod c0 c1'')) p
-            Prod c1' c1'' -> associate (triple (Prod (Prod c0 c1') c1'') p)
-            Loop c1' -> commute (triple (Prod (Loop c1') c0) p)
-            Seq c1' c1'' ->
-              if loopless c1'
-              then triple (Seq (Prod Skip c1') (Prod c0 c1'')) p
-              else triple (Seq (Prod c0 c1') (Prod Skip c1'')) p
-            _ -> error ("Some impossible state has been reached: `" ++ showCom c ++ "`.")
+    Prod c0 c1 ->
+      if loopless c0 || loopless c1
+      then do
+        r <- left (triple c0 p)
+        right (triple c1 r)
+      else
+        case c1 of
+          Sum c1' c1'' -> triple (Sum (Prod c0 c1') (Prod c0 c1'')) p
+          Prod c1' c1'' -> associate (triple (Prod (Prod c0 c1') c1'') p)
+          Loop c1' -> commute (triple (Prod (Loop c1') c0) p)
+          Seq c1' c1'' ->
+            if loopless c1'
+            then triple (Seq (Prod Skip c1') (Prod c0 c1'')) p
+            else triple (Seq (Prod c0 c1') (Prod Skip c1'')) p
+          _ -> error ("Some impossible state has been reached: `" ++ showCom c ++ "`.")
 
 hoare :: Com -> [QProp]
 hoare c =
@@ -358,7 +358,7 @@ showCom = \case
   Assign v e -> v ++ " := " ++ smt2Expr e
   Assert e -> "assert " ++ smt2Prop e
   Seq c0 c1 -> showCom c0 ++ ";\n" ++ showCom c1
-  Sum cs -> "{" ++ (intercalate "} +\n {" (map showCom cs) ) ++ "}"
+  Sum c0 c1 -> "{" ++ showCom c0 ++ "} +\n {" ++ showCom c1 ++ "}"
   Prod c0 c1 -> "{" ++ showCom c0 ++ "} *\n {" ++ showCom c1 ++ "}"
   Loop c -> "LOOP {\n" ++ showCom c ++ "}"
 
@@ -418,9 +418,8 @@ example =
 
 example2 :: Com
 example2 =
-  Sum [ Assign "x" (ALit 0)
-      , Assign "x" (ALit 1)
-      ]
+  Sum (Assign "x" (ALit 0))
+      (Assign "x" (ALit 1))
   `Seq`
   Assert (Lt (V "x") (ALit 0))
 
@@ -433,32 +432,59 @@ example3 =
   Assign "i1" (ALit 0) `Seq`
   Loop (
     Sum
-      [ Assert (Lt (V "i0") (V "n")) `Seq`
+      (Assert (Lt (V "i0") (V "n")) `Seq`
         Assign "s0" (Add (V "s0") (V "i0")) `Seq`
-        Assign "i0" (Add (V "i0") (ALit 1))
-      , Assert (Ge (V "i0") (V "n"))
-      ]
+        Assign "i0" (Add (V "i0") (ALit 1)))
+      (Assert (Ge (V "i0") (V "n")))
   ) `Seq`
   Assert (Ge (V "i0") (V "n")) `Seq`
   Loop (
     Sum
-      [ Assert (Lt (V "i1") (V "n")) `Seq`
+      (Assert (Lt (V "i1") (V "n")) `Seq`
         Assign "s1" (Add (V "s1") (V "i1")) `Seq`
-        Assign "i1" (Add (V "i1") (ALit 1))
-      , Assert (Ge (V "i1") (V "n"))
-      ]
+        Assign "i1" (Add (V "i1") (ALit 1)))
+      (Assert (Ge (V "i1") (V "n")))
   ) `Seq`
   Assert (Ge (V "i1") (V "n")) `Seq`
-  Assert (Not (Impl (Eql (V "i0") (V "i1")) (Eql (V "s0") (V "s1"))))
+  Assert (Not (Eql (V "s0") (V "s1")))
 
 example4 :: Com
 example4 =
-  Assign "a" (ALit 0) `Seq`
-  Assign "b" (ALit 0) `Seq`
+  Assign "s0" (ALit 0) `Seq`
+  Assign "s1" (ALit 0) `Seq`
+  Assign "i0" (ALit 0) `Seq`
+  Assign "i1" (ALit 0) `Seq`
   Loop (
-    Assert (Lt (V "b") (V "n")) `Seq`
-    Assign "b" (Add (V "b") (ALit 1)) `Seq`
-    Assign "a" (Add (V "a") (V "b"))
+    Sum
+      (Assert (Lt (V "i0") (V "n")) `Seq`
+        Assign "s0" (Add (V "s0") (V "i0")) `Seq`
+        Assign "i0" (Add (V "i0") (ALit 1)))
+      (Assert (Ge (V "i0") (V "n")))
   ) `Seq`
-  Assert (Not (Lt (V "b") (V "n"))) `Seq`
-  Assert (Not (Ge (V "a") (V "n")))
+  Assert (Ge (V "i0") (V "n")) `Seq`
+
+  Loop (
+    Sum
+      (Assert (Lt (V "i1") (V "n")) `Seq`
+        Assign "s1" (Add (V "s1") (V "i1")) `Seq`
+        Assign "i1" (Add (V "i1") (ALit 1)))
+      (Assert (Ge (V "i1") (V "n")))
+  ) `Seq`
+  Assert (Ge (V "i1") (V "n")) `Seq`
+
+  Assign "s2" (ALit 0) `Seq`
+  Assign "s3" (ALit 0) `Seq`
+  Assign "i2" (ALit 0) `Seq`
+  Loop (
+    Sum
+      (Assert (Lt (V "i2") (V "n")) `Seq`
+        Assign "s2" (Add (V "s2") (V "i2")) `Seq`
+        Assign "s3" (Add (V "s3") (V "i2")) `Seq`
+        Assign "i2" (Add (V "i2") (ALit 1)))
+      (Assert (Ge (V "i2") (V "n")))
+  ) `Seq`
+  Assert (Ge (V "i2") (V "n")) `Seq`
+
+  Assert (Not (And
+    (Eql (V "s0") (V "s2"))
+    (Eql (V "s1") (V "s3"))))
