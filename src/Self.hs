@@ -29,13 +29,25 @@ data Expr
   = ALit Integer
   | Add Expr Expr
   | V Var
+  | Store Expr Expr Expr
+  | Select Expr Expr
   deriving (Show, Read, Eq, Ord)
+
+exprKind :: Expr -> Kind
+exprKind = \case
+  ALit _ -> INT
+  Add{} -> INT
+  V (Var _ k) -> k
+  Store{} -> ARRAY
+  Select{} -> INT
 
 esubst :: Var -> Expr -> Expr -> Expr
 esubst x e = \case
   ALit i -> ALit i
   Add e0 e1 -> Add (go e0) (go e1)
   V v -> if v == x then e else V v
+  Store e0 e1 e2 -> Store (go e0) (go e1) (go e2)
+  Select e0 e1 -> Select (go e0) (go e1)
   where
     go = esubst x e
 
@@ -47,11 +59,15 @@ erename c = \case
   ALit i -> ALit i
   V v -> V (vrename c v)
   Add a0 a1 -> Add (erename c a0) (erename c a1)
+  Store a0 a1 a2 -> Store (erename c a0) (erename c a1) (erename c a2)
+  Select a0 a1 -> Select (erename c a0) (erename c a1)
 
 evocab :: Expr -> Set Var
 evocab = \case
   V v -> S.singleton v
   Add e0 e1 -> S.union (evocab e0) (evocab e1)
+  Store e0 e1 e2 -> S.unions [evocab e0, evocab e1, evocab e2]
+  Select e0 e1 -> S.union (evocab e0) (evocab e1)
   ALit{} -> S.empty
 
 type ID = Int
@@ -116,7 +132,7 @@ pvocab = \case
   Ge e0 e1 -> S.union (evocab e0) (evocab e1)
   Rel _ es -> S.unions (map evocab es)
 
-propRels :: Prop -> Set (ID, Int)
+propRels :: Prop -> Set (ID, [Kind])
 propRels = \case
   T -> S.empty
   F -> S.empty
@@ -126,7 +142,7 @@ propRels = \case
   Eql{} -> S.empty
   Lt{} -> S.empty
   Ge{} -> S.empty
-  Rel i es -> S.singleton (i, length es)
+  Rel i es -> S.singleton (i, map exprKind es)
 
 -- | The space of non-deterministic imperative commands.
 data Com
@@ -366,12 +382,17 @@ smt2 c = unlines [header, decls, body, footer]
                      , sexpr ["set-option", ":fixedpoint.engine", "\"duality\""]
                      ]
     footer = unlines [ sexpr ["check-sat"], sexpr ["get-model"] ]
-    decl (i, n) = sexpr ["declare-fun", "R" ++ show i, sexpr (replicate n "Int"), "Bool"]
+    decl (i, ks) = sexpr ["declare-fun", "R" ++ show i, sexpr (map smt2Kind ks), "Bool"]
     decls = unlines $ map decl (S.toList rels)
     body = unlines (map smt2QProp qs)
     qs = hoare c
     rels = S.unions (map qrels qs)
     qrels (Forall _ p) = propRels p
+
+smt2Kind :: Kind -> String
+smt2Kind = \case
+  INT -> "Int"
+  ARRAY -> "(Array Int Int)"
 
 smt2QProp :: QProp -> String
 smt2QProp (Forall vs p) = sexpr ["assert", body] ++ "\n"
@@ -379,15 +400,14 @@ smt2QProp (Forall vs p) = sexpr ["assert", body] ++ "\n"
     body = case vs of
              [] -> smt2Prop p
              _ -> sexpr ["forall", (sexpr $ map var vs) ++ "\n", "  " ++ smt2Prop p]
-    var (Var v k) = sexpr [v, kind k]
-    kind = \case
-      INT -> "Int"
-      ARRAY -> "(Array Int Int)"
+    var (Var v k) = sexpr [v, smt2Kind k]
 
 smt2Expr :: Expr -> String
 smt2Expr = \case
   ALit i -> show i
   Add a0 a1 -> sexpr ["+", smt2Expr a0, smt2Expr a1]
+  Store a0 a1 a2 -> sexpr ["store", smt2Expr a0, smt2Expr a1, smt2Expr a2]
+  Select a0 a1 -> sexpr ["select", smt2Expr a0, smt2Expr a1]
   V (Var v _) -> v
 
 smt2Prop :: Prop -> String
@@ -433,7 +453,7 @@ example3 =
     )] `Seq`
   While [
     ( Lt (V i1) (V n)
-    , Assign s1 (Add (V s1) (V s1)) `Seq`
+    , Assign s1 (Add (V s1) (V i1)) `Seq`
       Assign i1 (Add (V i1) (ALit 1))
     )] `Seq`
   Assert (Not (Eql (V s0) (V s1)))
