@@ -522,3 +522,41 @@ buildInspect =
     a = Var "a" INT
     b = Var "b" INT
     x = Var "x" INT
+
+triangleList :: Com
+triangleList =
+  mseq
+    [ initializeHeap
+    , alloc 2 head
+    , Assign tail (V head)
+    , Assign i (ALit 0)
+    , While [(Lt (V i) (V n),
+        mseq
+          [ save (V tail) (V i)
+          , alloc 2 tmp
+          , save (Add (V tail) (ALit 1)) (V tmp)
+          , Assign tail (V tmp)
+          , Assign i (Add (V i) (ALit 1))
+          ]
+      )]
+    , Assign i (ALit 0)
+    , Assign s0 (ALit 0)
+    , Assign s1 (ALit 0)
+    , While [(Not (Eql (V head) (V tail)),
+        mseq
+          [ Assign s0 (Add (V s0) (V i))
+          , Assign s1 (Add (V s1) (load (V head)))
+          , Assign head (load (Add (V head) (ALit 1)))
+          , Assign i (Add (V i) (ALit 1))
+          ]
+      )]
+    , Assert (Not (Eql (V s0) (V s1)))
+    ]
+  where
+    head = Var "head" INT
+    tail = Var "tail" INT
+    s0 = Var "s0" INT
+    s1 = Var "s1" INT
+    tmp = Var "tmp" INT
+    i = Var "i" INT
+    n = Var "n" INT
