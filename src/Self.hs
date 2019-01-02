@@ -70,12 +70,12 @@ data Prop
   | Rel ID [Expr]
   deriving (Show, Read, Eq, Ord)
 
-(/\) :: Prop -> Prop -> Prop
-(/\) T p = p
-(/\) p T = p
-(/\) F _ = F
-(/\) _ F = F
-(/\) p q = p `And` q
+pand :: Prop -> Prop -> Prop
+pand T p = p
+pand p T = p
+pand F _ = F
+pand _ F = F
+pand p q = p `And` q
 
 psubst :: Var -> Expr -> Prop -> Prop
 psubst x e = \case
@@ -259,14 +259,17 @@ temporary = do
 quantify :: Prop -> QProp
 quantify p = Forall (S.toList (pvocab p)) p
 
-(==>) :: Prop -> Prop -> M ()
-(==>) p q = tell [quantify (p `Impl` q)]
+(/\) :: [Prop] -> Prop -> [Prop]
+(/\) ps p = map (`pand` p) ps
+
+(==>) :: [Prop] -> Prop -> M ()
+(==>) ps q = mapM_ (\p ->tell [quantify (p `Impl` q)]) ps
 
 equiv :: St -> St -> M Prop
-equiv (Composite st0 st1) (Composite st2 st3) = (/\) <$> equiv st0 st2 <*> equiv st1 st3
+equiv (Composite st0 st1) (Composite st2 st3) = pand <$> equiv st0 st2 <*> equiv st1 st3
 equiv (Singleton i) (Singleton j) = do
   voc <- view vocab
-  pure (foldr (\v p -> eq1 i j (V v) /\ p) T voc)
+  pure (foldr (\v p -> eq1 i j (V v) `pand` p) T voc)
   where eq1 i j v = erename i v `Eql` erename j v
 
 double :: M a -> M a
@@ -286,7 +289,7 @@ double ac = do
     flatten (Singleton c) = [c]
     flatten (Composite st0 st1) = flatten st0 ++ flatten st1
 
-triple :: Com -> Prop -> M Prop
+triple :: Com -> [Prop] -> M [Prop]
 triple c p =
   case mergeLoops c of
     Skip -> pure p
@@ -294,7 +297,8 @@ triple c p =
       t <- temporary
       Singleton st <- view theState
       let x' = vrename st x
-      pure $ psubst x' (V t) p /\ (Eql (V x') (esubst x' (V t) (erename st a)))
+      pure $
+        map (\p -> psubst x' (V t) p `pand` (Eql (V x') (esubst x' (V t) (erename st a)))) p
     Assert e -> do
       Singleton st <- view theState
       pure (p /\ (prename st e))
@@ -318,16 +322,13 @@ triple c p =
     Sum c0 c1 -> do
       q0 <- triple c0 p
       q1 <- triple c1 p
-      q <- rel
-      q0 ==> q
-      q1 ==> q
-      pure q
+      pure (q0 ++ q1)
     Loop c -> do
       r <- rel
       p ==> r
-      q <- triple c r
+      q <- triple c [r]
       q ==> r
-      pure r
+      pure [r]
     Prod c0 c1 ->
       if loopless c0 || loopless c1
       then do
@@ -349,8 +350,8 @@ hoare c =
   let ctx = initialEnv c
    in execWriter $ evalStateT (runReaderT
         (do
-          q <- triple c T
-          q ==> F) ctx) initialCtxt
+          qs <- triple c [T]
+          qs ==> F) ctx) initialCtxt
 
 showCom :: Com -> String
 showCom = \case
