@@ -156,6 +156,9 @@ data Com
   | While [(Prop, Com)]
   deriving (Show, Read, Eq, Ord)
 
+mseq :: [Com] -> Com
+mseq = foldr1 Seq
+
 cvocab :: Com -> Set Var
 cvocab = \case
   Assign v e -> S.insert v $ evocab e
@@ -458,24 +461,43 @@ smt2Prop = \case
 
 example3 :: Com
 example3 =
-  Assign s0 (ALit 0) `Seq`
-  Assign s1 (ALit 0) `Seq`
-  Assign i0 (ALit 0) `Seq`
-  Assign i1 (ALit 0) `Seq`
-  While [
-    ( Lt (V i0) (V n)
-    , Assign s0 (Add (V s0) (V i0)) `Seq`
-      Assign i0 (Add (V i0) (ALit 1))
-    )] `Seq`
-  While [
-    ( Lt (V i1) (V n)
-    , Assign s1 (Add (V s1) (V i1)) `Seq`
-      Assign i1 (Add (V i1) (ALit 1))
-    )] `Seq`
-  Assert (Not (Eql (V s0) (V s1)))
+  mseq
+    [ Assign s0 (ALit 0)
+    , Assign s1 (ALit 0)
+    , Assign i0 (ALit 0)
+    , Assign i1 (ALit 0)
+    , While [
+      ( Lt (V i0) (V n)
+      , Assign s0 (Add (V s0) (V i0)) `Seq`
+        Assign i0 (Add (V i0) (ALit 1))
+      )]
+    , While [
+      ( Lt (V i1) (V n)
+      , Assign s1 (Add (V s1) (V i1)) `Seq`
+        Assign i1 (Add (V i1) (ALit 1))
+      )]
+    , Assert (Not (Eql (V s0) (V s1)))
+    ]
   where
     s0 = Var "s0" INT
     s1 = Var "s1" INT
     i0 = Var "i0" INT
     i1 = Var "i1" INT
     n = Var "n" INT
+
+buildInspect :: Com
+buildInspect =
+  mseq
+    [ alloc 1 a
+    , Assign b (V a)
+    , While [
+        mseq
+          [ alloc 1 x
+          , save (V b) (V x)
+          ]
+      ]
+    ]
+  where
+    a = Var "a" INT
+    b = Var "b" INT
+    x = Var "x" INT
