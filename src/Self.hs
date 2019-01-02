@@ -192,11 +192,11 @@ mergeLoops = \case
         c1' = mergeLoops c1
     in case (c0', c1') of
          (Loop c0, Loop c1) ->
-           Loop (
-             Sum [ Prod c0 c1
-                 , Prod c0 Skip
-                 , Prod Skip c1
-                 ])
+           Loop (Prod c0 c1)
+             -- Sum [ Prod c0 c1
+             --     , Prod c0 Skip
+             --     , Prod Skip c1
+             --     ])
          _ -> Prod c0' c1'
   c -> c
 
@@ -432,15 +432,21 @@ example3 =
   Assign "i0" (ALit 0) `Seq`
   Assign "i1" (ALit 0) `Seq`
   Loop (
-    Assert (Lt (V "i0") (V "n")) `Seq`
-    Assign "s0" (Add (V "s0") (V "i0")) `Seq`
-    Assign "i0" (Add (V "i0") (ALit 1))
+    Sum
+      [ Assert (Lt (V "i0") (V "n")) `Seq`
+        Assign "s0" (Add (V "s0") (V "i0")) `Seq`
+        Assign "i0" (Add (V "i0") (ALit 1))
+      , Assert (Ge (V "i0") (V "n"))
+      ]
   ) `Seq`
   Assert (Ge (V "i0") (V "n")) `Seq`
   Loop (
-    Assert (Lt (V "i1") (V "n")) `Seq`
-    Assign "s1" (Add (V "s1") (V "i1")) `Seq`
-    Assign "i1" (Add (V "i1") (ALit 1))
+    Sum
+      [ Assert (Lt (V "i1") (V "n")) `Seq`
+        Assign "s1" (Add (V "s1") (V "i1")) `Seq`
+        Assign "i1" (Add (V "i1") (ALit 1))
+      , Assert (Ge (V "i1") (V "n"))
+      ]
   ) `Seq`
   Assert (Ge (V "i1") (V "n")) `Seq`
   Assert (Not (Impl (Eql (V "i0") (V "i1")) (Eql (V "s0") (V "s1"))))
