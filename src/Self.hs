@@ -359,6 +359,22 @@ hoare c =
           qs <- triple c [T]
           qs ==> F) ctx) initialCtxt
 
+point, heap :: Var
+point = Var "POINT" INT
+heap = Var "HEAP" ARRAY
+
+alloc :: Integer -> Var -> Com
+alloc n v =
+  Seq
+    (Assign v (V point))
+    (Assign point (Add (V point) (ALit n)))
+
+save :: Expr -> Expr -> Com
+save addr val = Assign heap (Store (V heap) addr val)
+
+load :: Expr -> Expr
+load addr = Select (V heap) addr
+
 showCom :: Com -> String
 showCom = \case
   Skip -> "skip"
