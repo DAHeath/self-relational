@@ -153,6 +153,7 @@ data Com
   | Sum Com Com
   | Prod Com Com
   | Loop Com
+  | While [(Prop, Com)]
   deriving (Show, Read, Eq, Ord)
 
 cvocab :: Com -> Set Var
@@ -164,10 +165,12 @@ cvocab = \case
   Sum c0 c1 -> cvocab c0 `S.union` cvocab c1
   Prod c0 c1 -> cvocab c0 `S.union` cvocab c1
   Loop c -> cvocab c
+  While bodies -> foldMap (\(b, c) -> pvocab b `S.union` cvocab c) bodies
 
 loopless :: Com -> Bool
 loopless = \case
   Loop{} -> False
+  While{} -> False
   Sum c0 c1 -> loopless c0 && loopless c1
   Prod c0 c1 -> loopless c0 && loopless c1
   Seq c0 c1 -> loopless c0 && loopless c1
@@ -193,10 +196,7 @@ mergeLoops = \case
     in case (c0', c1') of
          (Loop c0, Loop c1) ->
            Loop (Prod c0 c1)
-             -- Sum [ Prod c0 c1
-             --     , Prod c0 Skip
-             --     , Prod Skip c1
-             --     ])
+         (While b0, While b1) -> While (b0 ++ b1)
          _ -> Prod c0' c1'
   c -> c
 
@@ -329,6 +329,16 @@ triple c p =
       q <- triple c [r]
       q ==> r
       pure [r]
+    While bodies -> do
+      r <- rel
+      p ==> r
+      let (exit : cs) =
+            map (foldr1 Prod) $
+            sequence $
+            map (\(b, c) -> [Assert (Not b), Seq (Assert b) c]) bodies
+      qs <- traverse (`triple` [r]) cs
+      concat qs ==> r
+      triple exit [r]
     Prod c0 c1 ->
       if loopless c0 || loopless c1
       then do
@@ -339,6 +349,7 @@ triple c p =
           Sum c1' c1'' -> triple (Sum (Prod c0 c1') (Prod c0 c1'')) p
           Prod c1' c1'' -> associate (triple (Prod (Prod c0 c1') c1'') p)
           Loop c1' -> commute (triple (Prod (Loop c1') c0) p)
+          While c1' -> commute (triple (Prod (While c1') c0) p)
           Seq c1' c1'' ->
             if loopless c1'
             then triple (Seq (Prod Skip c1') (Prod c0 c1'')) p
@@ -362,6 +373,10 @@ showCom = \case
   Sum c0 c1 -> "{" ++ showCom c0 ++ "} +\n {" ++ showCom c1 ++ "}"
   Prod c0 c1 -> "{" ++ showCom c0 ++ "} *\n {" ++ showCom c1 ++ "}"
   Loop c -> "LOOP {\n" ++ showCom c ++ "}"
+  While bs -> "While {\n" ++
+    intercalate "\n  " (map showBody bs) ++ "}"
+      where showBody :: (Prop, Com) -> String
+            showBody (p, c) = smt2Prop p ++ " -> " ++ showCom c
 
 sexpr :: [String] -> String
 sexpr ss = "(" ++ unwords ss ++ ")"
@@ -431,22 +446,16 @@ example3 =
   Assign "s1" (ALit 0) `Seq`
   Assign "i0" (ALit 0) `Seq`
   Assign "i1" (ALit 0) `Seq`
-  Loop (
-    Sum
-      (Assert (Lt (V "i0") (V "n")) `Seq`
-        Assign "s0" (Add (V "s0") (V "i0")) `Seq`
-        Assign "i0" (Add (V "i0") (ALit 1)))
-      (Assert (Ge (V "i0") (V "n")))
-  ) `Seq`
-  Assert (Ge (V "i0") (V "n")) `Seq`
-  Loop (
-    Sum
-      (Assert (Lt (V "i1") (V "n")) `Seq`
-        Assign "s1" (Add (V "s1") (V "i1")) `Seq`
-        Assign "i1" (Add (V "i1") (ALit 1)))
-      (Assert (Ge (V "i1") (V "n")))
-  ) `Seq`
-  Assert (Ge (V "i1") (V "n")) `Seq`
+  While [
+    ( Lt (V "i0") (V "n")
+    , Assign "s0" (Add (V "s0") (V "i0")) `Seq`
+      Assign "i0" (Add (V "i0") (ALit 1))
+    )] `Seq`
+  While [
+    ( Lt (V "i1") (V "n")
+    , Assign "s1" (Add (V "s1") (V "i1")) `Seq`
+      Assign "i1" (Add (V "i1") (ALit 1))
+    )] `Seq`
   Assert (Not (Eql (V "s0") (V "s1")))
 
 example4 :: Com
