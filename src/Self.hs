@@ -83,6 +83,7 @@ data Prop
   | Lt Expr Expr
   | Ge Expr Expr
   | Rel ID [Expr]
+  | Star
   deriving (Show, Read, Eq, Ord)
 
 pand :: Prop -> Prop -> Prop
@@ -103,6 +104,7 @@ psubst x e = \case
   Lt e0 e1 -> Lt (goe e0) (goe e1)
   Ge e0 e1 -> Ge (goe e0) (goe e1)
   Rel i es -> Rel i (map goe es)
+  Star -> Star
   where
     go = psubst x e
     goe = esubst x e
@@ -117,9 +119,11 @@ prename i = \case
   Eql e0 e1 -> Eql (goe e0) (goe e1)
   Lt e0 e1 -> Lt (goe e0) (goe e1)
   Ge e0 e1 -> Ge (goe e0) (goe e1)
+  Star -> Star
   where
     go = prename i
     goe = erename i
+
 pvocab :: Prop -> Set Var
 pvocab = \case
   T -> S.empty
@@ -131,6 +135,7 @@ pvocab = \case
   Lt e0 e1 -> S.union (evocab e0) (evocab e1)
   Ge e0 e1 -> S.union (evocab e0) (evocab e1)
   Rel _ es -> S.unions (map evocab es)
+  Star -> S.empty
 
 propRels :: Prop -> Set (ID, [Kind])
 propRels = \case
@@ -143,6 +148,7 @@ propRels = \case
   Lt{} -> S.empty
   Ge{} -> S.empty
   Rel i es -> S.singleton (i, map exprKind es)
+  Star -> S.empty
 
 -- | The space of non-deterministic imperative commands.
 data Com
@@ -300,6 +306,8 @@ triple c p =
       let x' = vrename st x
       pure $
         map (\p -> psubst x' (V t) p `pand` (Eql (V x') (esubst x' (V t) (erename st a)))) p
+    Assert Star -> pure p
+    Assert (Not Star) -> pure p
     Assert e -> do
       Singleton st <- view theState
       pure (p /\ (prename st e))
@@ -365,6 +373,9 @@ hoare c =
 point, heap :: Var
 point = Var "POINT" INT
 heap = Var "HEAP" ARRAY
+
+initializeHeap :: Com
+initializeHeap = Assign point (ALit 1)
 
 alloc :: Integer -> Var -> Com
 alloc n v =
@@ -440,6 +451,7 @@ smt2Prop = \case
   Lt e0 e1 -> sexpr ["<", smt2Expr e0, smt2Expr e1]
   Ge e0 e1 -> sexpr [">=", smt2Expr e0, smt2Expr e1]
   Rel i es -> sexpr (("R" ++ show i) : map smt2Expr es)
+  Star -> undefined
   where
     conjuncts :: Prop -> [Prop]
     conjuncts (And p0 p1) = conjuncts p0 ++ conjuncts p1
@@ -488,14 +500,23 @@ example3 =
 buildInspect :: Com
 buildInspect =
   mseq
-    [ alloc 1 a
+    [ initializeHeap
+    , alloc 1 a
     , Assign b (V a)
-    , While [
+    , While [(
+        Star,
         mseq
           [ alloc 1 x
           , save (V b) (V x)
+          , Assign b (V x)
           ]
-      ]
+       )]
+    , save (V b) (ALit 0)
+    , While [(
+        Not (Eql (V a) (V b)),
+        Assign a (load (V a))
+       )]
+    , Assert (Not (Eql (load (V a)) (ALit 0)))
     ]
   where
     a = Var "a" INT
