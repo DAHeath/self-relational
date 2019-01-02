@@ -11,13 +11,18 @@ import Control.Monad.Reader
 import Control.Monad.Except
 import qualified Data.Set as S
 import           Data.Set (Set)
-import qualified Data.Map as M
-import           Data.Map (Map)
 import           Data.List (intercalate)
 
 import Debug.Trace
 
-type Var = String
+data Kind = INT | ARRAY
+  deriving (Show, Read, Eq, Ord)
+
+data Var = Var String Kind
+  deriving (Show, Read, Eq, Ord)
+
+kind :: Var -> Kind
+kind (Var _ k) = k
 
 -- | The space of arithmetic expressions.
 data Expr
@@ -35,19 +40,13 @@ esubst x e = \case
     go = esubst x e
 
 vrename :: Int -> Var -> Var
-vrename c v = v ++ "_" ++ show c
+vrename c (Var v k) = Var (v ++ "_" ++ show c) k
 
 erename :: Int -> Expr -> Expr
 erename c = \case
   ALit i -> ALit i
   V v -> V (vrename c v)
   Add a0 a1 -> Add (erename c a0) (erename c a1)
-
-elookup :: (Map Var Expr) -> Expr -> Expr
-elookup m = \case
-  ALit i -> ALit i
-  V v -> M.findWithDefault (V v) v m
-  Add a0 a1 -> Add (elookup m a0) (elookup m a1)
 
 evocab :: Expr -> Set Var
 evocab = \case
@@ -105,21 +104,6 @@ prename i = \case
   where
     go = prename i
     goe = erename i
-
-plookup :: (Map Var Expr) -> Prop -> Prop
-plookup m = \case
-  T -> T
-  F -> F
-  Not p -> Not (go p)
-  And p0 p1 -> And (go p0) (go p1)
-  Impl p0 p1 -> Impl (go p0) (go p1)
-  Eql e0 e1 -> Eql (goe e0) (goe e1)
-  Lt e0 e1 -> Lt (goe e0) (goe e1)
-  Ge e0 e1 -> Ge (goe e0) (goe e1)
-  where
-    go = plookup m
-    goe = elookup m
-
 pvocab :: Prop -> Set Var
 pvocab = \case
   T -> S.empty
@@ -249,10 +233,10 @@ rel = do
   let es = concatMap (\i -> map (erename i . V) v) act
   pure (Rel c es)
 
-temporary :: M Var
-temporary = do
+temporary :: Kind -> M Var
+temporary k = do
   c <- temporaryCount <<+= 1
-  pure ("V" ++ show c)
+  pure (Var ("V" ++ show c) k)
 
 quantify :: Prop -> QProp
 quantify p = Forall (S.toList (pvocab p)) p
@@ -292,7 +276,7 @@ triple c p =
   case mergeLoops c of
     Skip -> pure p
     Assign x a -> do
-      t <- temporary
+      t <- temporary (kind x)
       Singleton st <- view theState
       let x' = vrename st x
       pure $
@@ -362,7 +346,7 @@ hoare c =
 showCom :: Com -> String
 showCom = \case
   Skip -> "skip"
-  Assign v e -> v ++ " := " ++ smt2Expr e
+  Assign (Var v _) e -> v ++ " := " ++ smt2Expr e
   Assert e -> "assert " ++ smt2Prop e
   Seq c0 c1 -> showCom c0 ++ ";\n" ++ showCom c1
   Sum c0 c1 -> "{" ++ showCom c0 ++ "} +\n {" ++ showCom c1 ++ "}"
@@ -395,13 +379,16 @@ smt2QProp (Forall vs p) = sexpr ["assert", body] ++ "\n"
     body = case vs of
              [] -> smt2Prop p
              _ -> sexpr ["forall", (sexpr $ map var vs) ++ "\n", "  " ++ smt2Prop p]
-    var v = sexpr [v, "Int"]
+    var (Var v k) = sexpr [v, kind k]
+    kind = \case
+      INT -> "Int"
+      ARRAY -> "(Array Int Int)"
 
 smt2Expr :: Expr -> String
 smt2Expr = \case
   ALit i -> show i
   Add a0 a1 -> sexpr ["+", smt2Expr a0, smt2Expr a1]
-  V v -> v
+  V (Var v _) -> v
 
 smt2Prop :: Prop -> String
 smt2Prop = \case
@@ -419,34 +406,40 @@ smt2Prop = \case
     conjuncts (And p0 p1) = conjuncts p0 ++ conjuncts p1
     conjuncts p = [p]
 
-example :: Com
-example =
-  Assign "x" (ALit 0) `Seq`
-  Assign "x" (Add (V "x") (ALit 1)) `Seq`
-  -- Assign "x" (Add (V "x") (ALit 1)) `Seq`
-  Assert (Not (Eql (V "x") (ALit 1)))
+-- example :: Com
+-- example =
+--   Assign "x" (ALit 0) `Seq`
+--   Assign "x" (Add (V "x") (ALit 1)) `Seq`
+--   -- Assign "x" (Add (V "x") (ALit 1)) `Seq`
+--   Assert (Not (Eql (V "x") (ALit 1)))
 
-example2 :: Com
-example2 =
-  If (Eql (V "x") (ALit 0))
-     (Assign "x" (ALit 0))
-     (Assign "x" (ALit 1)) `Seq`
-  Assert (Lt (V "x") (ALit 0))
+-- example2 :: Com
+-- example2 =
+--   If (Eql (V "x") (ALit 0))
+--      (Assign "x" (ALit 0))
+--      (Assign "x" (ALit 1)) `Seq`
+--   Assert (Lt (V "x") (ALit 0))
 
 example3 :: Com
 example3 =
-  Assign "s0" (ALit 0) `Seq`
-  Assign "s1" (ALit 0) `Seq`
-  Assign "i0" (ALit 0) `Seq`
-  Assign "i1" (ALit 0) `Seq`
+  Assign s0 (ALit 0) `Seq`
+  Assign s1 (ALit 0) `Seq`
+  Assign i0 (ALit 0) `Seq`
+  Assign i1 (ALit 0) `Seq`
   While [
-    ( Lt (V "i0") (V "n")
-    , Assign "s0" (Add (V "s0") (V "i0")) `Seq`
-      Assign "i0" (Add (V "i0") (ALit 1))
+    ( Lt (V i0) (V n)
+    , Assign s0 (Add (V s0) (V i0)) `Seq`
+      Assign i0 (Add (V i0) (ALit 1))
     )] `Seq`
   While [
-    ( Lt (V "i1") (V "n")
-    , Assign "s1" (Add (V "s1") (V "i1")) `Seq`
-      Assign "i1" (Add (V "i1") (ALit 1))
+    ( Lt (V i1) (V n)
+    , Assign s1 (Add (V s1) (V s1)) `Seq`
+      Assign i1 (Add (V i1) (ALit 1))
     )] `Seq`
-  Assert (Not (Eql (V "s0") (V "s1")))
+  Assert (Not (Eql (V s0) (V s1)))
+  where
+    s0 = Var "s0" INT
+    s1 = Var "s1" INT
+    i0 = Var "i0" INT
+    i1 = Var "i1" INT
+    n = Var "n" INT
