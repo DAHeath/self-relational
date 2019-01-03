@@ -153,6 +153,7 @@ propRels = \case
 -- | The space of non-deterministic imperative commands.
 data Com
   = Assign Var Expr
+  | Havoc Var
   | Assert Prop
   | Skip
   | Seq Com Com
@@ -168,6 +169,7 @@ mseq = foldr1 Seq
 cvocab :: Com -> Set Var
 cvocab = \case
   Assign v e -> S.insert v $ evocab e
+  Havoc v -> S.singleton v
   Assert p -> pvocab p
   Skip -> S.empty
   Seq c0 c1 -> cvocab c0 `S.union` cvocab c1
@@ -185,6 +187,7 @@ loopless = \case
   Seq c0 c1 -> loopless c0 && loopless c1
   Assert{} -> True
   Assign{} -> True
+  Havoc{} -> True
   Skip -> True
 
 looplessStart :: Com -> Bool
@@ -306,6 +309,11 @@ triple c p =
       let x' = vrename st x
       pure $
         map (\p -> psubst x' (V t) p `pand` (Eql (V x') (esubst x' (V t) (erename st a)))) p
+    Havoc x -> do
+      t <- temporary (kind x)
+      Singleton st <- view theState
+      let x' = vrename st x
+      pure $ map (\p -> psubst x' (V t) p) p
     Assert Star -> pure p
     Assert (Not Star) -> pure p
     Assert e -> do
@@ -393,6 +401,7 @@ showCom :: Com -> String
 showCom = \case
   Skip -> "skip"
   Assign (Var v _) e -> v ++ " := " ++ smt2Expr e
+  Havoc (Var v _) -> "havoc " ++ v
   Assert e -> "assert " ++ smt2Prop e
   Seq c0 c1 -> showCom c0 ++ ";\n" ++ showCom c1
   Sum c0 c1 -> "{" ++ showCom c0 ++ "} +\n {" ++ showCom c1 ++ "}"
@@ -558,5 +567,45 @@ triangleList =
     s0 = Var "s0" INT
     s1 = Var "s1" INT
     tmp = Var "tmp" INT
+    i = Var "i" INT
+    n = Var "n" INT
+
+listSum :: Com
+listSum =
+  mseq
+    [ initializeHeap
+    , alloc 2 head
+    , Assign tail (V head)
+    , Assign s0 (ALit 0)
+    , Assign i (ALit 0)
+    , While [(Lt (V i) (V n),
+        mseq
+          [ Havoc x
+          , Assign s0 (Add (V s0) (V x))
+          , alloc 2 tmp
+          , save (V tail) (V x)
+          , save (Add (V tail) (ALit 1)) (V tmp)
+          , Assign tail (V tmp)
+          , Assign i (Add (V i) (ALit 1))
+          ]
+        )]
+    , Assign s1 (ALit 0)
+    , Assign i (ALit 0)
+    , While [(Lt (V i) (V n),
+          mseq
+            [ Assign s1 (Add (V s1) (load (V head)))
+            , Assign head (load (Add (V head) (ALit 1)))
+            , Assign i (Add (V i) (ALit 1))
+            ]
+        )]
+    , Assert (Not (Eql (V s0) (V s1)))
+    ]
+  where
+    head = Var "head" INT
+    tail = Var "tail" INT
+    tmp = Var "tmp" INT
+    s0 = Var "s0" INT
+    s1 = Var "s1" INT
+    x = Var "x" INT
     i = Var "i" INT
     n = Var "n" INT
