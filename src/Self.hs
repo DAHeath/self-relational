@@ -76,6 +76,7 @@ data Prop
   | F
   | Not Prop
   | And Prop Prop
+  | Or Prop Prop
   | Impl Prop Prop
   | Eql Expr Expr
   | Lt Expr Expr
@@ -97,6 +98,7 @@ psubst x e = \case
   F -> F
   Not p -> Not (go p)
   And p0 p1 -> And (go p0) (go p1)
+  Or p0 p1 -> Or (go p0) (go p1)
   Impl p0 p1 -> Impl (go p0) (go p1)
   Eql e0 e1 -> Eql (goe e0) (goe e1)
   Lt e0 e1 -> Lt (goe e0) (goe e1)
@@ -113,6 +115,7 @@ prename i = \case
   F -> F
   Not p -> Not (go p)
   And p0 p1 -> And (go p0) (go p1)
+  Or p0 p1 -> Or (go p0) (go p1)
   Impl p0 p1 -> Impl (go p0) (go p1)
   Eql e0 e1 -> Eql (goe e0) (goe e1)
   Lt e0 e1 -> Lt (goe e0) (goe e1)
@@ -128,6 +131,7 @@ pvocab = \case
   F -> S.empty
   Not p -> pvocab p
   And p0 p1 -> S.union (pvocab p0) (pvocab p1)
+  Or p0 p1 -> S.union (pvocab p0) (pvocab p1)
   Impl p0 p1 -> S.union (pvocab p0) (pvocab p1)
   Eql e0 e1 -> S.union (evocab e0) (evocab e1)
   Lt e0 e1 -> S.union (evocab e0) (evocab e1)
@@ -141,6 +145,7 @@ propRels = \case
   F -> S.empty
   Not p -> propRels p
   And p0 p1 -> propRels p0 `S.union` propRels p1
+  Or p0 p1 -> propRels p0 `S.union` propRels p1
   Impl p0 p1 -> propRels p0 `S.union` propRels p1
   Eql{} -> S.empty
   Lt{} -> S.empty
@@ -158,6 +163,7 @@ data Com
   | If Prop Com Com
   | Sum Com Com
   | Prod Com Com
+  | Loop Com
   | While [(Prop, Com)]
   deriving (Show, Read, Eq, Ord)
 
@@ -174,10 +180,12 @@ cvocab = \case
   If p c0 c1 -> pvocab p `S.union` cvocab c0 `S.union` cvocab c1
   Sum c0 c1 -> cvocab c0 `S.union` cvocab c1
   Prod c0 c1 -> cvocab c0 `S.union` cvocab c1
+  Loop c -> cvocab c
   While bodies -> foldMap (\(b, c) -> pvocab b `S.union` cvocab c) bodies
 
 loopless :: Com -> Bool
 loopless = \case
+  Loop{} -> False
   While{} -> False
   If _ c0 c1 -> loopless c0 && loopless c1
   Sum c0 c1 -> loopless c0 && loopless c1
@@ -204,6 +212,8 @@ mergeLoops = \case
     let c0' = mergeLoops c0
         c1' = mergeLoops c1
     in case (c0', c1') of
+         (Loop c0, Loop c1) ->
+           Loop (Sum (Prod c0 Skip) (Prod Skip c1))
          (While b0, While b1) -> While (b0 ++ b1)
          _ -> Prod c0' c1'
   c -> c
@@ -267,11 +277,15 @@ temporary k = do
 quantify :: Prop -> QProp
 quantify p = Forall (S.toList (pvocab p)) p
 
+por :: [Prop] -> Prop
+por = foldr1 Or
+
 (/\) :: [Prop] -> Prop -> [Prop]
 (/\) ps p = map (`pand` p) ps
 
 (==>) :: [Prop] -> Prop -> M ()
-(==>) ps q = mapM_ (\p ->tell [quantify (p `Impl` q)]) ps
+(==>) ps q = tell [quantify (por ps `Impl` q)]
+  -- mapM_ (\p -> tell [quantify (p `Impl` q)]) ps
 
 equiv :: St -> St -> M Prop
 equiv (Composite st0 st1) (Composite st2 st3) = pand <$> equiv st0 st2 <*> equiv st1 st3
@@ -341,6 +355,12 @@ triple c p =
       q0 <- triple c0 p
       q1 <- triple c1 p
       pure (q0 ++ q1)
+    Loop c -> do
+      r <- rel
+      p ==> r
+      q <- triple c [r]
+      q ==> r
+      pure [r]
     While bodies -> do
       r <- rel
       p ==> r
@@ -362,6 +382,7 @@ triple c p =
             triple (Prod c0 (Sum (Seq (Assert b) c1') (Seq (Assert (Not b)) c1''))) p
           Sum c1' c1'' -> triple (Sum (Prod c0 c1') (Prod c0 c1'')) p
           Prod c1' c1'' -> associate (triple (Prod (Prod c0 c1') c1'') p)
+          Loop c1' -> commute (triple (Prod c1 c0) p)
           While c1' -> commute (triple (Prod c1 c0) p)
           Seq c1' c1'' ->
             if loopless c1'
@@ -405,6 +426,7 @@ showCom = \case
   Seq c0 c1 -> showCom c0 ++ ";\n" ++ showCom c1
   Sum c0 c1 -> "{" ++ showCom c0 ++ "} +\n {" ++ showCom c1 ++ "}"
   Prod c0 c1 -> "{" ++ showCom c0 ++ "} *\n {" ++ showCom c1 ++ "}"
+  Loop c -> "LOOP {\n" ++ showCom c ++ "}"
   While bs -> "While {\n" ++
     intercalate "\n  " (map showBody bs) ++ "}"
       where showBody :: (Prop, Com) -> String
@@ -454,16 +476,19 @@ smt2Prop = \case
   F -> "false"
   Not p -> sexpr ["not", smt2Prop p]
   And p0 p1 -> sexpr ("and" : map smt2Prop (conjuncts p0 ++ conjuncts p1))
-  Impl p0 p1 -> sexpr ["=>", smt2Prop p0, smt2Prop p1]
+  Or p0 p1 -> sexpr ("or" : map (("\n" ++) . smt2Prop) (disjuncts p0 ++ disjuncts p1))
+  Impl p0 p1 -> sexpr ["=>", smt2Prop p0, "\n", smt2Prop p1]
   Eql e0 e1 -> sexpr ["=", smt2Expr e0, smt2Expr e1]
   Lt e0 e1 -> sexpr ["<", smt2Expr e0, smt2Expr e1]
   Ge e0 e1 -> sexpr [">=", smt2Expr e0, smt2Expr e1]
   Rel i es -> sexpr (("R" ++ show i) : map smt2Expr es)
   Star -> undefined
   where
-    conjuncts :: Prop -> [Prop]
+    conjuncts, disjuncts :: Prop -> [Prop]
     conjuncts (And p0 p1) = conjuncts p0 ++ conjuncts p1
     conjuncts p = [p]
+    disjuncts (Or p0 p1) = disjuncts p0 ++ disjuncts p1
+    disjuncts p = [p]
 
 -- example :: Com
 -- example =
@@ -485,18 +510,21 @@ example3 =
     [ Assign s0 (ALit 0)
     , Assign s1 (ALit 0)
     , Assign i0 (ALit 0)
-    -- , Assign i1 (ALit 0)
-    , While [
-      ( Lt (V i0) (V n)
-      , Assign s0 (Add (V s0) (V i0)) `Seq`
-        Assign i0 (Add (V i0) (ALit 1))
-      )]
     , Assign i1 (ALit 0)
-    , While [
-      ( Lt (V i1) (V n)
-      , Assign s1 (Add (V s1) (V i1)) `Seq`
-        Assign i1 (Add (V i1) (ALit 1))
-      )]
+    , Loop $
+        mseq
+          [ Assert (Lt (V i0) (V n))
+          , Assign s0 (Add (V s0) (V i0))
+          , Assign i0 (Add (V i0) (ALit 1))
+          ]
+    , Assert (Ge (V i0) (V n))
+    , Loop $
+        mseq
+          [ Assert (Lt (V i1) (V n))
+          , Assign s1 (Add (V s1) (V i1))
+          , Assign i1 (Add (V i1) (ALit 1))
+          ]
+    , Assert (Ge (V i1) (V n))
     , Assert (Not (Eql (V s0) (V s1)))
     ]
   where
