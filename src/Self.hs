@@ -1,5 +1,4 @@
 {-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE MultiWayIf #-}
 {-# LANGUAGE TemplateHaskell #-}
 module Self where
@@ -8,7 +7,6 @@ import Control.Lens
 import Control.Monad.State
 import Control.Monad.Writer hiding (Sum)
 import Control.Monad.Reader
-import Control.Monad.Except
 import qualified Data.Set as S
 import           Data.Set (Set)
 import           Data.List (intercalate)
@@ -301,6 +299,7 @@ double ac = do
 
 triple :: Com -> [Prop] -> M [Prop]
 triple c p =
+  traceM (showCom c) >> traceM "" >>
   case mergeLoops c of
     Skip -> pure p
     Assign x a -> do
@@ -363,7 +362,7 @@ triple c p =
             triple (Prod c0 (Sum (Seq (Assert b) c1') (Seq (Assert (Not b)) c1''))) p
           Sum c1' c1'' -> triple (Sum (Prod c0 c1') (Prod c0 c1'')) p
           Prod c1' c1'' -> associate (triple (Prod (Prod c0 c1') c1'') p)
-          While c1' -> commute (triple (Prod (While c1') c0) p)
+          While c1' -> commute (triple (Prod c1 c0) p)
           Seq c1' c1'' ->
             if loopless c1'
             then triple (Seq (Prod Skip c1') (Prod c0 c1'')) p
@@ -486,12 +485,13 @@ example3 =
     [ Assign s0 (ALit 0)
     , Assign s1 (ALit 0)
     , Assign i0 (ALit 0)
-    , Assign i1 (ALit 0)
+    -- , Assign i1 (ALit 0)
     , While [
       ( Lt (V i0) (V n)
       , Assign s0 (Add (V s0) (V i0)) `Seq`
         Assign i0 (Add (V i0) (ALit 1))
       )]
+    , Assign i1 (ALit 0)
     , While [
       ( Lt (V i1) (V n)
       , Assign s1 (Add (V s1) (V i1)) `Seq`

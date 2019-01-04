@@ -84,9 +84,9 @@ TODO
   }
   \qquad
   \inference[\textsc{Seq}]{%
-    \forall \sigma_0.\hoare{P}{c_0}{\aleft(R, \sigma_0)}&
-    \forall \sigma_1.\hoare{\aright(S, \sigma_1)}{c_1}{Q}\\
-    \hoare{R}{c_0 \times c_1}{S}
+    \hoare{\ajoin(P)}{c_0}{R}&
+    \hoare{R}{c_0 \times c_1}{S}&
+    \hoare{S}{c_0}{\ajoin(Q)}
   }{%
     \hoare{P}{\cseq{c_0}{c_1}}{Q}
   }
@@ -94,15 +94,6 @@ TODO
   \inference[\textsc{Prod}]{%
     \forall \sigma_1.\hoare{\aright(P, \sigma_1)}{c_0}{\aright(R, \sigma_1)}\\
     \forall \sigma_0.\hoare{\aleft(R, \sigma_0)}{c_1}{\aleft(Q, \sigma_0)}
-  }{%
-    \hoare{P}{c_0 \times c_1}{Q}
-  }
-  \qquad
-  \inference[\textsc{Split}]{%
-    \hoare{P_0}{c_0}{Q_0}&
-    P\, \Rightarrow \pairwise(P_{\,0}, P_{\,1})\\
-    \hoare{P_1}{c_1}{Q_1}&
-    Q \Leftarrow \pairwise(Q_0,Q_1)
   }{%
     \hoare{P}{c_0 \times c_1}{Q}
   }
@@ -129,7 +120,7 @@ TODO
   \associate(P) :=%
   \lambda((\sigma_0 \otimes \sigma_1) \otimes \sigma_2).~P(\sigma_0
   \otimes (\sigma_1 \otimes \sigma_2))\\
-  \pairwise(P, Q) := \lambda(\sprod{\sigma_0}{\sigma_1}).~P(\sigma_0) \land Q(\sigma_1)
+  \ajoin(P) := \lambda(\sigma_0 \otimes \sigma_1).~(\sigma_0 = \sigma_1) \land P(\sigma_0)
 \end{gather*}
 \end{subequations}
 \end{spreadlines}
@@ -137,7 +128,7 @@ TODO
 Hoare Triples. Key rules that deviate from more traditional Hoare
 Logic systems are boxed.
 $\textsf{commute}$, $\textsf{associate}$, and
-$\textsf{pairwise}$ are helper definitions for the proof rules.
+$\Join$ are helper definitions for the proof rules.
 Metavariables $P, Q, R\ldots$ represent program
 assertions. Other metavariables are consistent with
 \cref{fig:semantics}}\label{fig:proof-system}

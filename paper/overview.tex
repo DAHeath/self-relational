@@ -2,10 +2,57 @@
 \begin{document}
 \section{Overview}\label{sec:overview}
 
-TODO
-\begin{itemize}
-  \item Loop fusion example
-  \item Shape Analysis example
-  \item Killer example?
-\end{itemize}
+In this section, we demonstrate our proof system with a small example.
+
+\begin{figure}
+\begin{lstlisting}
+  s := 0;
+  t := 0;
+  i := 0;
+  while (i < n) { // s = i(i+1)/2 & t = 0
+    s := s+i;
+    i := i+1;
+  };
+  i := 0;
+  while (i < n) { // s = n(n+1)/2 & t = i(i+1)/2
+    t := t+i;
+    i := i+1;
+  };
+  assert (s = t)
+\end{lstlisting}
+  \caption{%
+    An imperative program with two loops computing equivalent
+    functions.
+  }\label{fig:overview-example}
+\end{figure}
+
+Consider the small imperative program in \cref{fig:overview-example}.
+The program has two loops that both compute the $n^{th}$ triangle
+number (i.e. the sum from 0 to $n$). As human observers we can clearly
+see that the assertion at the end of the fragment is valid: Every run
+of this program results in a state where $s$ and $t$ have the same
+value. The key to this observation is the similarity between the two
+loops.
+
+Unfortunately, traditional proof methods are not poised to take
+advantage of the simple structure of this program. In a traditional
+Hoare Logic approach, for example, the prover must find \emph{loop
+invariants} which support the assertion at the end of the program.
+The code fragment contains sufficient loop invariants that support the
+assertion. However, these invariants rely on nonlinear arithmetic,
+and thus most automated approaches will fail to find them.
+%
+Moreover this approach has completely missed the simplicity of the
+given problem: The two loops together contain simple relationships
+which support the conclusion. However, the proof methodology we have
+adopted thus far forces us to consider the loops \emph{separately}.
+
+Our approach seeks to augment the traditional proof method of Hoare
+Logic by providing an elegant technique for considering various parts of the
+same program \emph{simultaneously}. By carefully applying this
+technique, a prover can solve proof burdens like the one specified in
+\cref{fig:overview-example} more simply.
+Specifically, in this example, the prover can decide to consider both
+loops simultaneously.
+
 \end{document}

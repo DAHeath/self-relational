@@ -10,6 +10,14 @@
 \usepackage{semantic}
 \usepackage{mathtools}
 \usepackage{empheq}
+\usepackage{listings}
+
+\lstset{language=C,
+  basicstyle=\ttfamily,
+  keywordstyle=\bfseries,
+  showstringspaces=false,
+  morekeywords={include, printf}
+}
 
 \newtheorem{theorem}{Theorem}
 
@@ -42,13 +50,15 @@
 \newcommand{\btrue}{\textsf{true}}
 \newcommand{\bfalse}{\textsf{false}}
 
-\newcommand{\hoare}[3]{\{\!\!\{#1\}\!\!\}~#2~\{\!\!\{#3\}\!\!\}}
+\newcommand{\assertion}[1]{\{\!\!\{#1\}\!\!\}}
+\newcommand{\hoare}[3]{\assertion{#1}~#2~\assertion{#3}}
 \newcommand{\judgement}[4]{#1 \vdash \hoare{#2}{#3}{#4}}
 \newcommand{\pairwise}{\textsf{pairwise}}
 \newcommand{\commute}{\textsf{commute}}
 \newcommand{\associate}{\textsf{associate}}
 \newcommand{\aleft}{\textsf{left}}
 \newcommand{\aright}{\textsf{right}}
+\newcommand{\ajoin}{\textsf{join}}
 
 \begin{document}
 \maketitle

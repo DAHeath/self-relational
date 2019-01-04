@@ -274,6 +274,27 @@ Proof.
     * eauto.
 Qed.
 
+Theorem iloop_prod2 : forall c0 c1,
+  LOOP { c0 } *** LOOP { c1 } ~>
+  LOOP { (c0 *** SKIP) +++ (SKIP *** c1) }.
+Proof.
+  unfold supersedes; intros.
+  inversion H; subst.
+  remember (LOOP { c0 }) as loop0.
+  induction H2; try (inversion Heqloop0); clear Heqloop0; subst.
+  - intuition.
+    econstructor.
+    eapply ESumLeft; econstructor; eauto.
+    eauto.
+  - remember (LOOP { c1 }) as loop1.
+    induction H5; try (inversion Heqloop1); clear Heqloop1; subst.
+    + intuition.
+      econstructor.
+      eapply ESumRight; econstructor; eauto.
+      eauto.
+    + eapply EBreak.
+Qed.
+
 Definition Assertion := state -> Prop.
 
 Definition triple (P:Assertion) (c:com) (Q:Assertion) : Prop :=
