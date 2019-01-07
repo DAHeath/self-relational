@@ -13,14 +13,7 @@ import           Data.List (intercalate)
 
 import Debug.Trace
 
-data Kind = INT | ARRAY
-  deriving (Show, Read, Eq, Ord)
-
-data Var = Var String Kind
-  deriving (Show, Read, Eq, Ord)
-
-kind :: Var -> Kind
-kind (Var _ k) = k
+type Var = String
 
 -- | The space of arithmetic expressions.
 data Expr
@@ -30,14 +23,6 @@ data Expr
   | Store Expr Expr Expr
   | Select Expr Expr
   deriving (Show, Read, Eq, Ord)
-
-exprKind :: Expr -> Kind
-exprKind = \case
-  ALit _ -> INT
-  Add{} -> INT
-  V (Var _ k) -> k
-  Store{} -> ARRAY
-  Select{} -> INT
 
 esubst :: Var -> Expr -> Expr -> Expr
 esubst x e = \case
@@ -50,7 +35,7 @@ esubst x e = \case
     go = esubst x e
 
 vrename :: Int -> Var -> Var
-vrename c (Var v k) = Var (v ++ "_" ++ show c) k
+vrename c v = v ++ "_" ++ show c
 
 erename :: Int -> Expr -> Expr
 erename c = \case
@@ -139,7 +124,7 @@ pvocab = \case
   Rel _ es -> S.unions (map evocab es)
   Star -> S.empty
 
-propRels :: Prop -> Set (ID, [Kind])
+propRels :: Prop -> Set (ID, [()])
 propRels = \case
   T -> S.empty
   F -> S.empty
@@ -150,7 +135,7 @@ propRels = \case
   Eql{} -> S.empty
   Lt{} -> S.empty
   Ge{} -> S.empty
-  Rel i es -> S.singleton (i, map exprKind es)
+  Rel i es -> S.singleton (i, map (const ()) es)
   Star -> S.empty
 
 -- | The space of non-deterministic imperative commands.
@@ -264,10 +249,10 @@ rel = do
   let es = concatMap (\i -> map (erename i . V) v) act
   pure (Rel c es)
 
-temporary :: Kind -> M Var
-temporary k = do
+temporary :: M Var
+temporary = do
   c <- temporaryCount <<+= 1
-  pure (Var ("V" ++ show c) k)
+  pure ("V" ++ show c)
 
 quantify :: Prop -> QProp
 quantify p = Forall (S.toList (pvocab p)) p
@@ -324,13 +309,13 @@ triple c p = do
   case mergeLoops c of
     Skip -> pure p
     Assign x a -> do
-      t <- temporary (kind x)
+      t <- temporary
       Singleton st <- view theState
       let x' = vrename st x
       pure $
         map (\p -> psubst x' (V t) p `pand` (Eql (V x') (esubst x' (V t) (erename st a)))) p
     Havoc x -> do
-      t <- temporary (kind x)
+      t <- temporary
       Singleton st <- view theState
       let x' = vrename st x
       pure $ map (\p -> psubst x' (V t) p) p
@@ -400,30 +385,11 @@ hoare c =
           qs <- triple c [T]
           qs ==> F) ctx) initialCtxt
 
-point, heap :: Var
-point = Var "POINT" INT
-heap = Var "HEAP" ARRAY
-
-initializeHeap :: Com
-initializeHeap = Assign point (ALit 1)
-
-alloc :: Integer -> Var -> Com
-alloc n v =
-  Seq
-    (Assign v (V point))
-    (Assign point (Add (V point) (ALit n)))
-
-save :: Expr -> Expr -> Com
-save addr val = Assign heap (Store (V heap) addr val)
-
-load :: Expr -> Expr
-load addr = Select (V heap) addr
-
 showCom :: Com -> String
 showCom = \case
   Skip -> "skip"
-  Assign (Var v _) e -> v ++ " := " ++ smt2Expr e
-  Havoc (Var v _) -> "havoc " ++ v
+  Assign v e -> v ++ " := " ++ smt2Expr e
+  Havoc v -> "havoc " ++ v
   Assert e -> "assert " ++ smt2Prop e
   Seq c0 c1 -> showCom c0 ++ ";\n" ++ showCom c1
   Sum c0 c1 -> "{" ++ showCom c0 ++ "} +\n {" ++ showCom c1 ++ "}"
@@ -443,17 +409,12 @@ smt2 c = unlines [header, decls, body, footer]
                      , sexpr ["set-option", ":fixedpoint.engine", "\"duality\""]
                      ]
     footer = unlines [ sexpr ["check-sat"], sexpr ["get-model"] ]
-    decl (i, ks) = sexpr ["declare-fun", "R" ++ show i, sexpr (map smt2Kind ks), "Bool"]
+    decl (i, ks) = sexpr ["declare-fun", "R" ++ show i, sexpr (map (const "Int") ks), "Bool"]
     decls = unlines $ map decl (S.toList rels)
     body = unlines (map smt2QProp qs)
     qs = hoare c
     rels = S.unions (map qrels qs)
     qrels (Forall _ p) = propRels p
-
-smt2Kind :: Kind -> String
-smt2Kind = \case
-  INT -> "Int"
-  ARRAY -> "(Array Int Int)"
 
 smt2QProp :: QProp -> String
 smt2QProp (Forall vs p) = sexpr ["assert", body] ++ "\n"
@@ -461,7 +422,7 @@ smt2QProp (Forall vs p) = sexpr ["assert", body] ++ "\n"
     body = case vs of
              [] -> smt2Prop p
              _ -> sexpr ["forall", (sexpr $ map var vs) ++ "\n", "  " ++ smt2Prop p]
-    var (Var v k) = sexpr [v, smt2Kind k]
+    var v = sexpr [v, "Int"]
 
 smt2Expr :: Expr -> String
 smt2Expr = \case
@@ -469,7 +430,7 @@ smt2Expr = \case
   Add a0 a1 -> sexpr ["+", smt2Expr a0, smt2Expr a1]
   Store a0 a1 a2 -> sexpr ["store", smt2Expr a0, smt2Expr a1, smt2Expr a2]
   Select a0 a1 -> sexpr ["select", smt2Expr a0, smt2Expr a1]
-  V (Var v _) -> v
+  V v -> v
 
 smt2Prop :: Prop -> String
 smt2Prop = \case
@@ -525,10 +486,10 @@ example3 =
     , Assert (Not (Eql (V s0) (V s1)))
     ]
   where
-    s0 = Var "s0" INT
-    s1 = Var "s1" INT
-    i = Var "i" INT
-    n = Var "n" INT
+    s0 = "s0"
+    s1 = "s1"
+    i = "i"
+    n = "n"
 
 loopFusion :: Com
 loopFusion =
@@ -568,113 +529,9 @@ loopFusion =
           (Eql (V b) (V d))))
     ]
   where
-    a = Var "a" INT
-    b = Var "b" INT
-    c = Var "c" INT
-    d = Var "d" INT
-    i = Var "i" INT
-    n = Var "n" INT
-
-buildInspect :: Com
-buildInspect =
-  mseq
-    [ initializeHeap
-    , alloc 1 a
-    , Assign b (V a)
-    , While [(
-        Star,
-        mseq
-          [ alloc 1 x
-          , save (V b) (V x)
-          , Assign b (V x)
-          ]
-       )]
-    , save (V b) (ALit 0)
-    , While [(
-        Not (Eql (V a) (V b)),
-        Assign a (load (V a))
-       )]
-    , Assert (Not (Eql (load (V a)) (ALit 0)))
-    ]
-  where
-    a = Var "a" INT
-    b = Var "b" INT
-    x = Var "x" INT
-
-triangleList :: Com
-triangleList =
-  mseq
-    [ initializeHeap
-    , alloc 2 head
-    , Assign tail (V head)
-    , Assign i (ALit 0)
-    , While [(Lt (V i) (V n),
-        mseq
-          [ save (V tail) (V i)
-          , alloc 2 tmp
-          , save (Add (V tail) (ALit 1)) (V tmp)
-          , Assign tail (V tmp)
-          , Assign i (Add (V i) (ALit 1))
-          ]
-      )]
-    , Assign i (ALit 0)
-    , Assign s0 (ALit 0)
-    , Assign s1 (ALit 0)
-    , While [(Not (Eql (V head) (V tail)),
-        mseq
-          [ Assign s0 (Add (V s0) (V i))
-          , Assign s1 (Add (V s1) (load (V head)))
-          , Assign head (load (Add (V head) (ALit 1)))
-          , Assign i (Add (V i) (ALit 1))
-          ]
-      )]
-    , Assert (Not (Eql (V s0) (V s1)))
-    ]
-  where
-    head = Var "head" INT
-    tail = Var "tail" INT
-    s0 = Var "s0" INT
-    s1 = Var "s1" INT
-    tmp = Var "tmp" INT
-    i = Var "i" INT
-    n = Var "n" INT
-
-listSum :: Com
-listSum =
-  mseq
-    [ initializeHeap
-    , alloc 2 head
-    , Assign tail (V head)
-    , Assign s0 (ALit 0)
-    , Assign i (ALit 0)
-    , While [(Lt (V i) (V n),
-        mseq
-          [ Havoc x
-          , Assign s0 (Add (V s0) (V x))
-          , alloc 2 tmp
-          , save (V tail) (V x)
-          , save (Add (V tail) (ALit 1)) (V tmp)
-          , Assign tail (V tmp)
-          , Assign i (Add (V i) (ALit 1))
-          ]
-        )]
-    , Assign s1 (ALit 0)
-    , Assign i (ALit 0)
-    , While [(Lt (V i) (V n),
-          mseq
-            [ Assign s1 (Add (V s1) (load (V head)))
-            , Assign head (load (Add (V head) (ALit 1)))
-            , Assign i (Add (V i) (ALit 1))
-            ]
-        )]
-    , Assert (Not (Eql (V s0) (V s1)))
-    ]
-  where
-    head = Var "head" INT
-    tail = Var "tail" INT
-    tmp = Var "tmp" INT
-    s0 = Var "s0" INT
-    s1 = Var "s1" INT
-    x = Var "x" INT
-    i = Var "i" INT
-    n = Var "n" INT
+    a = "a"
+    b = "b"
+    c = "c"
+    d = "d"
+    i = "i"
+    n = "n"
