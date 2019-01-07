@@ -76,6 +76,7 @@ data Prop
   | F
   | Not Prop
   | And Prop Prop
+  | Or Prop Prop
   | Impl Prop Prop
   | Eql Expr Expr
   | Lt Expr Expr
@@ -97,6 +98,7 @@ psubst x e = \case
   F -> F
   Not p -> Not (go p)
   And p0 p1 -> And (go p0) (go p1)
+  Or p0 p1 -> Or (go p0) (go p1)
   Impl p0 p1 -> Impl (go p0) (go p1)
   Eql e0 e1 -> Eql (goe e0) (goe e1)
   Lt e0 e1 -> Lt (goe e0) (goe e1)
@@ -113,6 +115,7 @@ prename i = \case
   F -> F
   Not p -> Not (go p)
   And p0 p1 -> And (go p0) (go p1)
+  Or p0 p1 -> Or (go p0) (go p1)
   Impl p0 p1 -> Impl (go p0) (go p1)
   Eql e0 e1 -> Eql (goe e0) (goe e1)
   Lt e0 e1 -> Lt (goe e0) (goe e1)
@@ -128,6 +131,7 @@ pvocab = \case
   F -> S.empty
   Not p -> pvocab p
   And p0 p1 -> S.union (pvocab p0) (pvocab p1)
+  Or p0 p1 -> S.union (pvocab p0) (pvocab p1)
   Impl p0 p1 -> S.union (pvocab p0) (pvocab p1)
   Eql e0 e1 -> S.union (evocab e0) (evocab e1)
   Lt e0 e1 -> S.union (evocab e0) (evocab e1)
@@ -141,6 +145,7 @@ propRels = \case
   F -> S.empty
   Not p -> propRels p
   And p0 p1 -> propRels p0 `S.union` propRels p1
+  Or p0 p1 -> propRels p0 `S.union` propRels p1
   Impl p0 p1 -> propRels p0 `S.union` propRels p1
   Eql{} -> S.empty
   Lt{} -> S.empty
@@ -270,8 +275,12 @@ quantify p = Forall (S.toList (pvocab p)) p
 (/\) :: [Prop] -> Prop -> [Prop]
 (/\) ps p = map (`pand` p) ps
 
+por :: [Prop] -> Prop
+por = foldr1 Or
+
 (==>) :: [Prop] -> Prop -> M ()
-(==>) ps q = mapM_ (\p ->tell [quantify (p `Impl` q)]) ps
+(==>) ps q = tell [quantify $ por ps `Impl` q]
+  -- mapM_ (\p -> tell [quantify (p `Impl` q)]) ps
 
 equiv :: St -> St -> M Prop
 equiv (Composite st0 st1) (Composite st2 st3) = pand <$> equiv st0 st2 <*> equiv st1 st3
@@ -297,9 +306,21 @@ double ac = do
     flatten (Singleton c) = [c]
     flatten (Composite st0 st1) = flatten st0 ++ flatten st1
 
+organize :: M a -> M a
+organize = local (theState %~ arrange)
+  where
+    arrange :: St -> St
+    arrange = foldr1 Composite . enumerate
+    enumerate :: St -> [St]
+    enumerate = \case
+      Singleton st -> [Singleton st]
+      Composite st0 st1 -> enumerate st0 ++ enumerate st1
+
 triple :: Com -> [Prop] -> M [Prop]
-triple c p =
-  traceM (showCom c) >> traceM "" >>
+triple c p = do
+  st <- view theState
+  traceM (show st)
+  traceM (showCom (mergeLoops c)) >> traceM ""
   case mergeLoops c of
     Skip -> pure p
     Assign x a -> do
@@ -328,7 +349,9 @@ triple c p =
               Seq c1' c1'' -> triple (Seq (Seq c0 c1') c1'') p
               c -> triple c0 p >>= triple c1
          | otherwise ->
-            double (do
+           case c1 of
+             Seq c1' c1'' -> triple (Seq (Seq c0 c1') c1'') p
+             _ -> double (do
               Composite st0 st1 <- view theState
               eq <- equiv st0 st1
               q <- triple (Prod Skip c0) (p /\ eq)
@@ -341,7 +364,7 @@ triple c p =
       q0 <- triple c0 p
       q1 <- triple c1 p
       pure (q0 ++ q1)
-    While bodies -> do
+    While bodies -> organize $ do
       r <- rel
       p ==> r
       let (exit : cs) =
@@ -454,6 +477,7 @@ smt2Prop = \case
   F -> "false"
   Not p -> sexpr ["not", smt2Prop p]
   And p0 p1 -> sexpr ("and" : map smt2Prop (conjuncts p0 ++ conjuncts p1))
+  Or p0 p1 -> sexpr ("or" : map (("\n" ++) . smt2Prop) (disjuncts p0 ++ disjuncts p1))
   Impl p0 p1 -> sexpr ["=>", smt2Prop p0, smt2Prop p1]
   Eql e0 e1 -> sexpr ["=", smt2Expr e0, smt2Expr e1]
   Lt e0 e1 -> sexpr ["<", smt2Expr e0, smt2Expr e1]
@@ -461,9 +485,11 @@ smt2Prop = \case
   Rel i es -> sexpr (("R" ++ show i) : map smt2Expr es)
   Star -> undefined
   where
-    conjuncts :: Prop -> [Prop]
+    conjuncts, disjuncts :: Prop -> [Prop]
     conjuncts (And p0 p1) = conjuncts p0 ++ conjuncts p1
     conjuncts p = [p]
+    disjuncts (Or p0 p1) = disjuncts p0 ++ disjuncts p1
+    disjuncts p = [p]
 
 -- example :: Com
 -- example =
@@ -484,26 +510,69 @@ example3 =
   mseq
     [ Assign s0 (ALit 0)
     , Assign s1 (ALit 0)
-    , Assign i0 (ALit 0)
-    -- , Assign i1 (ALit 0)
+    , Assign i (ALit 0)
     , While [
-      ( Lt (V i0) (V n)
-      , Assign s0 (Add (V s0) (V i0)) `Seq`
-        Assign i0 (Add (V i0) (ALit 1))
+      ( Lt (V i) (V n)
+      , Assign s0 (Add (V s0) (V i)) `Seq`
+        Assign i (Add (V i) (ALit 1))
       )]
-    , Assign i1 (ALit 0)
+    , Assign i (ALit 0)
     , While [
-      ( Lt (V i1) (V n)
-      , Assign s1 (Add (V s1) (V i1)) `Seq`
-        Assign i1 (Add (V i1) (ALit 1))
+      ( Lt (V i) (V n)
+      , Assign s1 (Add (V s1) (V i)) `Seq`
+        Assign i (Add (V i) (ALit 1))
       )]
     , Assert (Not (Eql (V s0) (V s1)))
     ]
   where
     s0 = Var "s0" INT
     s1 = Var "s1" INT
-    i0 = Var "i0" INT
-    i1 = Var "i1" INT
+    i = Var "i" INT
+    n = Var "n" INT
+
+loopFusion :: Com
+loopFusion =
+  mseq
+    [ Assign a (ALit 0)
+    , Assign b (ALit 0)
+    , Assign i (ALit 0)
+    , While [
+      ( Lt (V i) (V n)
+      , mseq
+          [ Assign a (Add (V a) (V i))
+          , Assign i (Add (V i) (ALit 1))
+          ]
+      )]
+    , Assign i (ALit 0)
+    , While [
+      ( Lt (V i) (V n)
+      , mseq
+          [ Assign b (Add (V b) (V i))
+          , Assign i (Add (V i) (ALit 1))
+          ]
+      )]
+    , Assign c (ALit 0)
+    , Assign d (ALit 0)
+    , Assign i (ALit 0)
+    , While [
+      ( Lt (V i) (V n)
+      , mseq
+          [ Assign c (Add (V c) (V i))
+          , Assign d (Add (V d) (V i))
+          , Assign i (Add (V i) (ALit 1))
+          ]
+      )]
+    , Assert (Not
+        (And
+          (Eql (V a) (V c))
+          (Eql (V b) (V d))))
+    ]
+  where
+    a = Var "a" INT
+    b = Var "b" INT
+    c = Var "c" INT
+    d = Var "d" INT
+    i = Var "i" INT
     n = Var "n" INT
 
 buildInspect :: Com
