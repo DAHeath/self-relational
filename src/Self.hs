@@ -284,8 +284,7 @@ por = foldr1 Or
 (/\) ps p = map (`pand` p) ps
 
 (==>) :: [Prop] -> Prop -> M ()
-(==>) ps q = tell [quantify (por ps `Impl` q)]
-  -- mapM_ (\p -> tell [quantify (p `Impl` q)]) ps
+(==>) ps q = tell [quantify $ por ps `Impl` q]
 
 equiv :: St -> St -> M Prop
 equiv (Composite st0 st1) (Composite st2 st3) = pand <$> equiv st0 st2 <*> equiv st1 st3
@@ -311,9 +310,21 @@ double ac = do
     flatten (Singleton c) = [c]
     flatten (Composite st0 st1) = flatten st0 ++ flatten st1
 
+organize :: M a -> M a
+organize = local (theState %~ arrange)
+  where
+    arrange :: St -> St
+    arrange = foldr1 Composite . enumerate
+    enumerate :: St -> [St]
+    enumerate = \case
+      Singleton st -> [Singleton st]
+      Composite st0 st1 -> enumerate st0 ++ enumerate st1
+
 triple :: Com -> [Prop] -> M [Prop]
-triple c p =
-  traceM (showCom c) >> traceM "" >>
+triple c p = do
+  st <- view theState
+  traceM (show st)
+  traceM (showCom (mergeLoops c)) >> traceM ""
   case mergeLoops c of
     Skip -> pure p
     Assign x a -> do
@@ -342,7 +353,9 @@ triple c p =
               Seq c1' c1'' -> triple (Seq (Seq c0 c1') c1'') p
               c -> triple c0 p >>= triple c1
          | otherwise ->
-            double (do
+           case c1 of
+             Seq c1' c1'' -> triple (Seq (Seq c0 c1') c1'') p
+             _ -> double (do
               Composite st0 st1 <- view theState
               eq <- equiv st0 st1
               q <- triple (Prod Skip c0) (p /\ eq)
@@ -361,16 +374,6 @@ triple c p =
       q <- triple c [r]
       q ==> r
       pure [r]
-    While bodies -> do
-      r <- rel
-      p ==> r
-      let (exit : cs) =
-            map (foldr1 Prod) $
-            sequence $
-            map (\(b, c) -> [Assert (Not b), Seq (Assert b) c]) bodies
-      qs <- traverse (`triple` [r]) cs
-      concat qs ==> r
-      triple exit [r]
     Prod c0 c1 ->
       if loopless c0 || loopless c1
       then do
@@ -532,6 +535,51 @@ example3 =
     s1 = Var "s1" INT
     i0 = Var "i0" INT
     i1 = Var "i1" INT
+    n = Var "n" INT
+
+loopFusion :: Com
+loopFusion =
+  mseq
+    [ Assign a (ALit 0)
+    , Assign b (ALit 0)
+    , Assign i (ALit 0)
+    , While [
+      ( Lt (V i) (V n)
+      , mseq
+          [ Assign a (Add (V a) (V i))
+          , Assign i (Add (V i) (ALit 1))
+          ]
+      )]
+    , Assign i (ALit 0)
+    , While [
+      ( Lt (V i) (V n)
+      , mseq
+          [ Assign b (Add (V b) (V i))
+          , Assign i (Add (V i) (ALit 1))
+          ]
+      )]
+    , Assign c (ALit 0)
+    , Assign d (ALit 0)
+    , Assign i (ALit 0)
+    , While [
+      ( Lt (V i) (V n)
+      , mseq
+          [ Assign c (Add (V c) (V i))
+          , Assign d (Add (V d) (V i))
+          , Assign i (Add (V i) (ALit 1))
+          ]
+      )]
+    , Assert (Not
+        (And
+          (Eql (V a) (V c))
+          (Eql (V b) (V d))))
+    ]
+  where
+    a = Var "a" INT
+    b = Var "b" INT
+    c = Var "c" INT
+    d = Var "d" INT
+    i = Var "i" INT
     n = Var "n" INT
 
 buildInspect :: Com

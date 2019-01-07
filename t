@@ -5,12 +5,6 @@
 (declare-fun R1 (Int Int Int Int Int Int Int Int Int Int) Bool)
 (declare-fun R2 (Int Int Int Int Int Int Int Int Int Int) Bool)
 
-(assert (forall ((i0_0 Int) (i1_0 Int) (n_0 Int) (s0_0 Int) (s1_0 Int) (i0_1 Int) (i1_1 Int) (n_1 Int) (s0_1 Int) (s1_1 Int))
-  (=> (and (= n_0 n_1) (or
-    (=> (= i0_0 i1_1) (= s0_0 s1_1))
-    (=> (= i0_0 (+ i1_1 1)) (= s0_0 (+ s1_1 i1_1)))))
-  (R1 i0_0 i1_0 n_0 s0_0 s1_0 i0_1 i1_1 n_1 s0_1 s1_1))))
-
 (assert (forall ((i0_0 Int) (i0_1 Int) (i1_0 Int) (i1_1 Int) (n_0 Int) (n_1 Int) (s0_0 Int) (s0_1 Int) (s1_0 Int) (s1_1 Int))
    (=> (and (= s0_0 0) (= s1_0 0) (= i0_0 0) (= i1_0 0) (= i0_0 i0_1) (= i1_0 i1_1) (= n_0 n_1) (= s0_0 s0_1) (= s1_0 s1_1)) 
  (R0 i0_0 i1_0 n_0 s0_0 s1_0 i0_1 i1_1 n_1 s0_1 s1_1))))
