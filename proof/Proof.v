@@ -37,9 +37,7 @@ Inductive com :=
 | csum : com -> com -> com
 | cprod : com -> com -> com
 | cloop : com -> com
-| cskip : com
-| cfork : com -> com
-| cjoin : com -> com.
+| cskip : com.
 
 Notation "x '::=' a" := (cassign x a) (at level 20).
 Notation "'ASSUME' e" := (cassume e) (at level 20, right associativity).
@@ -47,8 +45,6 @@ Notation "c0 ';;' c1" := (cseq c0 c1) (at level 55, right associativity).
 Notation "c0 '+++' c1" := (csum c0 c1) (at level 60, right associativity).
 Notation "c0 '***' c1" := (cprod c0 c1) (at level 65, right associativity).
 Notation "'LOOP' '{' c0 '}'" := (cloop c0) (at level 20, right associativity).
-Notation "'FORK' c" := (cfork c) (at level 20, right associativity).
-Notation "'JOIN' c" := (cjoin c) (at level 20, right associativity).
 Notation "'SKIP'" := cskip.
 
 Inductive state :=
@@ -115,13 +111,7 @@ Inductive ceval : com -> state -> state -> Prop :=
     ceval (cloop c) st st''
 | EBreak : forall st c,
     ceval (cloop c) st st
-| ESkip : forall st, ceval cskip st st
-| EFork : forall st st' c,
-    ceval c st st' ->
-    ceval (FORK c) st (st <*> st')
-| EJoin : forall st st' c,
-    ceval c st st' ->
-    ceval (JOIN c) (st <*> st') st'.
+| ESkip : forall st, ceval cskip st st.
 Hint Constructors ceval.
 
 Definition supersedes (c0:com) (c1:com) : Prop :=
@@ -274,27 +264,6 @@ Proof.
     * eauto.
 Qed.
 
-Theorem iloop_prod2 : forall c0 c1,
-  LOOP { c0 } *** LOOP { c1 } ~>
-  LOOP { (c0 *** SKIP) +++ (SKIP *** c1) }.
-Proof.
-  unfold supersedes; intros.
-  inversion H; subst.
-  remember (LOOP { c0 }) as loop0.
-  induction H2; try (inversion Heqloop0); clear Heqloop0; subst.
-  - intuition.
-    econstructor.
-    eapply ESumLeft; econstructor; eauto.
-    eauto.
-  - remember (LOOP { c1 }) as loop1.
-    induction H5; try (inversion Heqloop1); clear Heqloop1; subst.
-    + intuition.
-      econstructor.
-      eapply ESumRight; econstructor; eauto.
-      eauto.
-    + eapply EBreak.
-Qed.
-
 Definition Assertion := state -> Prop.
 
 Definition triple (P:Assertion) (c:com) (Q:Assertion) : Prop :=
@@ -421,70 +390,25 @@ Definition const_r (P:Assertion) : Assertion :=
   | composite st0 st1 => P st1
   end.
 
-Theorem hoare_fork : forall (P Q : Assertion) c,
-  (forall st, {{P}} c {{left Q st}}) ->
-  {{P}} FORK c {{Q}}.
-Proof.
-  unfold triple; intros.
-  inversion H0; subst.
-  eapply H; eauto.
-Qed.
-
-Theorem hoare_join : forall (P Q : Assertion) c,
-  {{P}} c {{Q}} ->
-  {{pairwise P Q}} JOIN c {{Q}}.
-Proof.
-  unfold triple; intros.
-  inversion H0; subst.
-  inversion H1; subst; eauto.
-Qed.
+Definition join (P : Assertion) : Assertion :=
+  fun st => match st with
+  | singleton _ => False
+  | composite st0 st1 => P st0 /\ st0 = st1
+  end.
 
 Theorem hoare_seq : forall (P Q R S : Assertion) c0 c1,
-  (forall st, {{P}} c0 {{left R st}}) ->
-  (forall st, {{right S st}} c1 {{Q}}) ->
+  {{join P}} SKIP *** c0 {{R}} ->
   {{R}} c0 *** c1 {{S}} ->
+  {{S}} c1 *** SKIP {{join Q}} ->
   {{P}} c0 ;; c1 {{Q}}.
 Proof.
-  unfold triple; intros.
-  inversion H2; clear H2; subst.
+  unfold triple, join; intros.
+  inversion H2; subst.
+  apply (H1 (st'0 <*> st') (st' <*> st')).
+  econstructor; eauto.
   eapply H0; eauto.
-  eapply H1; eauto.
   eapply H; eauto.
-Qed.
-
-
-Theorem hoare_seq : forall (P Q R S : Assertion) c0 c1,
-  {{pairwise P P}} SKIP *** c0 {{R}} ->
-  {{S}} c1 *** SKIP {{pairwise Q Q}} ->
-  {{R}} c0 *** c1 {{S}} ->
-  {{P}} c0 ;; c1 {{Q}}.
-Proof.
-  unfold triple; intros.
-  inversion H2; clear H2; subst.
-  assert (pairwise Q Q (st' <*> st')).
-  eapply H0.
-  econstructor. eauto.
-  eauto.
-  eapply H1.
-  econstructor.
-  eauto.
-  eauto.
-  eapply H.
-  econstructor.
-  eauto.
-  eauto.
-  simpl.
-  eauto.
-  eapply H2.
-Qed.
-
-Theorem hoare_seq' : forall P Q R c0 c1,
-  {{P}} c0 {{R}} ->
-  {{R}} c1 {{Q}} ->
-  {{P}} c0 ;; c1 {{Q}}.
-Proof.
-  unfold triple; intros.
-  inversion H1; subst; eauto.
+  simpl; eauto.
 Qed.
 
 Theorem hoare_split : forall (P P0 P1 Q Q0 Q1 : Assertion) c0 c1,
