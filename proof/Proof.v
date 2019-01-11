@@ -13,26 +13,15 @@ Inductive aexpr :=
 | alit : nat -> aexpr
 | avar : nat -> aexpr.
 
-Inductive boper :=
-| oeq : boper
-| olt : boper
-| ole : boper
-| ogt : boper
-| oge : boper.
+Inductive state :=
+| singleton : (nat -> nat) -> state
+| composite : state -> state -> state.
 
-Inductive bcomb :=
-| oand : bcomb
-| oor : bcomb
-| oimpl : bcomb.
-
-Inductive bexpr :=
-| bop : boper -> aexpr -> aexpr -> bexpr
-| bco : bcomb -> bexpr -> bexpr -> bexpr
-| bnot : bexpr -> bexpr.
+Definition assertion := state -> Prop.
 
 Inductive com :=
 | cassign : nat -> aexpr -> com
-| cassume : bexpr -> com
+| cassume : assertion -> com
 | cseq : com -> com -> com
 | csum : com -> com -> com
 | cprod : com -> com -> com
@@ -46,10 +35,6 @@ Notation "c0 '+++' c1" := (csum c0 c1) (at level 60, right associativity).
 Notation "c0 '***' c1" := (cprod c0 c1) (at level 65, right associativity).
 Notation "'LOOP' '{' c0 '}'" := (cloop c0) (at level 20, right associativity).
 Notation "'SKIP'" := cskip.
-
-Inductive state :=
-| singleton : (nat -> nat) -> state
-| composite : state -> state -> state.
 
 Notation "st0 '<*>' st1" := (composite st0 st1) (at level 60, right associativity).
 
@@ -67,30 +52,12 @@ Fixpoint aeval (st:nat -> nat) (e:aexpr) : nat :=
   | avar x => st x
   end.
 
-Fixpoint beval (st:nat -> nat) (e:bexpr) : bool :=
-  match e with
-  | bop o e1 e2 => match o with
-                   | oeq => aeval st e1 =? aeval st e2
-                   | olt => aeval st e1 <? aeval st e2
-                   | ole => aeval st e1 <=? aeval st e2
-                   | ogt => negb (aeval st e1 <=? aeval st e2)
-                   | oge => negb (aeval st e1 <? aeval st e2)
-                   end
-  | bco o e1 e2 => match o with
-                   | oand  => andb  (beval st e1) (beval st e2)
-                   | oor   => orb   (beval st e1) (beval st e2)
-                   | oimpl => implb (beval st e1) (beval st e2)
-                   end
-  | bnot e1 => negb (beval st e1)
-  end.
-
 Inductive ceval : com -> state -> state -> Prop :=
 | EAssign : forall st x e n,
     aeval st e = n ->
     ceval (x ::= e) (singleton st) (singleton (stupdate x n st))
-| EAssume : forall st e,
-    beval st e = true ->
-    ceval (cassume e) (singleton st) (singleton st)
+| EAssume : forall st (e : assertion),
+    e st -> ceval (cassume e) st st
 | ESeq : forall st st' st'' c0 c1,
     ceval c0 st st' ->
     ceval c1 st' st'' ->
@@ -125,21 +92,6 @@ Definition isomorphic (c0:com) (c1:com) : Prop :=
 Notation "c0 '~>' c1" := (supersedes c0 c1) (at level 80, right associativity) : type_scope.
 Notation "c0 '~=' c1" := (isomorphic c0 c1) (at level 80, right associativity) : type_scope.
 
-Check (forall c, c ~= c).
-
-Theorem irefl : forall c, c ~= c.
-Proof. unfold isomorphic; intuition. Qed.
-
-Theorem isymm : forall c0 c1, c0 ~= c1 -> c1 ~= c0.
-Proof. unfold isomorphic; intuition; eapply H; eauto. Qed.
-
-Theorem itrans : forall c0 c1 c2, c0 ~= c1 -> c1 ~= c2 -> c0 ~= c2.
-Proof.
-  unfold isomorphic; intuition.
-  - eapply H0; eapply H; eauto.
-  - eapply H; eapply H0; eauto.
-Qed.
-
 Theorem iskipl : forall c, SKIP ;; c ~= c.
 Proof.
   unfold isomorphic; split; intros.
@@ -167,19 +119,6 @@ Proof.
     eauto.
 Qed.
 
-Theorem iskipprod : SKIP *** SKIP ~= SKIP.
-Proof.
-  unfold isomorphic; split; intros.
-  - inversion H; subst.
-    inversion H2; subst.
-    inversion H5; subst.
-    eauto.
-  - inversion H; subst.
-    destruct st'.
-    + admit. (* ??? *)
-    + eauto.
-Admitted.
-
 Theorem iseqprod : forall c0 c1 c2 c3,
   (c0 ;; c1) *** (c2 ;; c3) ~= (c0 *** c2) ;; (c1 *** c3).
 Proof.
@@ -200,41 +139,6 @@ Proof.
   unfold isomorphic; split; intros.
   - inversion H; subst; inversion H2; subst; firstorder.
   - inversion H; subst; inversion H4; subst; firstorder.
-Qed.
-
-Theorem iseq : forall c0 c0' c1 c1',
-  c0 ~= c0' -> c1 ~= c1' -> c0 ;; c1 ~= c0' ;; c1'.
-Proof.
-  unfold isomorphic; split; intros; inversion H1; subst; econstructor
-  ; try (eapply H) ; try (eapply H0) ; eauto.
-Qed.
-
-Theorem isum : forall c0 c0' c1 c1',
-  c0 ~= c0' -> c1 ~= c1' -> c0 +++ c1 ~= c0' +++ c1'.
-Proof.
-  unfold isomorphic; split; intros; inversion H1; subst;
-  [ eapply ESumLeft; eapply H
-  | eapply ESumRight; eapply H0
-  | eapply ESumLeft; eapply H
-  | eapply ESumRight; eapply H0
-  ]; eauto.
-Qed.
-
-Theorem iprod : forall c0 c0' c1 c1',
-  c0 ~= c0' -> c1 ~= c1' -> c0 *** c1 ~= c0' *** c1'.
-Proof.
-  unfold isomorphic; split; intros; inversion H1; subst; econstructor
-  ; try (eapply H) ; try (eapply H0) ; eauto.
-Qed.
-
-Theorem iloop : forall c c',
-  c ~= c' -> LOOP { c } ~= LOOP { c' }.
-Proof.
-  unfold isomorphic; split; intros
-  ; [ remember (LOOP { c }) as loop
-    | remember (LOOP { c' }) as loop
-    ] ; induction H0; try (inversion Heqloop); subst; intuition;
-    econstructor; try (eapply H); eauto.
 Qed.
 
 Theorem iloop_prod : forall c0 c1,
@@ -264,28 +168,19 @@ Proof.
     * eauto.
 Qed.
 
-Definition Assertion := state -> Prop.
-
-Definition triple (P:Assertion) (c:com) (Q:Assertion) : Prop :=
+Definition triple (P:assertion) (c:com) (Q:assertion) : Prop :=
   forall st st', ceval c st st' -> P st -> Q st'.
 
 Notation "{{ P }} c {{ Q }}" := (triple P c Q) (at level 90, c at next level).
 
-Definition assn_sub x e P : Assertion :=
+Definition assn_sub x e P : assertion :=
   fun (st : state) => match st with
   | singleton s => P (singleton (stupdate x (aeval s e) s))
   | singleton s <*> st' => P (singleton (stupdate x (aeval s e) s) <*> st')
   | _ <*> _ => False
   end.
 
-Definition bassn b : Assertion :=
-  fun st => match st with
-            | singleton s => beval s b = true
-            | singleton s <*> _ => beval s b = true
-            | _ <*> _ => False
-            end.
-
-Definition commute (P:Assertion) : Assertion :=
+Definition commute (P:assertion) : assertion :=
   fun st => match st with
             | singleton st => False
             | composite st0 st1 => P (composite st1 st0)
@@ -302,7 +197,7 @@ Proof.
   auto.
 Qed.
 
-Definition associate (P:Assertion) : Assertion :=
+Definition associate (P:assertion) : assertion :=
   fun st => match st with
   | composite (composite st0 st1) st2 => P (composite st0 (composite st1 st2))
   | _ => False
@@ -325,14 +220,14 @@ Proof.
     assumption.
 Qed.
 
-Theorem hoare_supersedes : forall (P Q : Assertion) c c',
+Theorem hoare_supersedes : forall (P Q : assertion) c c',
   c ~> c' -> {{P}} c' {{Q}} -> {{P}} c {{Q}}.
 Proof.
   unfold supersedes, triple; intros.
   eapply H0; eauto.
 Qed.
 
-Theorem hoare_iso : forall (P Q : Assertion) c c',
+Theorem hoare_iso : forall (P Q : assertion) c c',
   c ~= c' -> {{P}} c' {{Q}} -> {{P}} c {{Q}}.
 Proof.
   unfold isomorphic, triple; intros.
@@ -347,9 +242,9 @@ Proof.
 Qed.
 
 Theorem hoare_assume : forall P e,
-  {{P}} ASSUME e {{fun st => P st /\ bassn e st}}.
+  {{P}} ASSUME e {{fun st => P st /\ e st}}.
 Proof.
-  unfold triple, bassn; intros; inversion H; subst; eauto.
+  unfold triple; intros; inversion H; subst; eauto.
 Qed.
 
 Theorem hoare_skip : forall P,
@@ -366,37 +261,37 @@ Proof.
   unfold triple; intros; inversion H1; inversion H5; subst; eauto.
 Qed.
 
-Definition pairwise (P:Assertion) (Q:Assertion) : Assertion :=
+Definition pairwise (P:assertion) (Q:assertion) : assertion :=
   fun st => match st with
             | singleton st => False
             | composite st0 st1 => P st0 /\ Q st1
             end.
 
-Definition left (P:Assertion) st0 : Assertion :=
+Definition left (P:assertion) st0 : assertion :=
   fun st1 => P (st0 <*> st1).
 
-Definition right (P:Assertion) st1 : Assertion :=
+Definition right (P:assertion) st1 : assertion :=
   fun st0 => P (st0 <*> st1).
 
-Definition const_l (P:Assertion) : Assertion :=
+Definition const_l (P:assertion) : assertion :=
   fun st => match st with
   | singleton _ => False
   | composite st0 st1 => P st0
   end.
 
-Definition const_r (P:Assertion) : Assertion :=
+Definition const_r (P:assertion) : assertion :=
   fun st => match st with
   | singleton _ => False
   | composite st0 st1 => P st1
   end.
 
-Definition join (P : Assertion) : Assertion :=
+Definition join (P : assertion) : assertion :=
   fun st => match st with
   | singleton _ => False
   | composite st0 st1 => P st0 /\ st0 = st1
   end.
 
-Theorem hoare_seq : forall (P Q R S : Assertion) c0 c1,
+Theorem hoare_seq : forall (P Q R S : assertion) c0 c1,
   {{join P}} SKIP *** c0 {{R}} ->
   {{R}} c0 *** c1 {{S}} ->
   {{S}} c1 *** SKIP {{join Q}} ->
@@ -411,7 +306,7 @@ Proof.
   simpl; eauto.
 Qed.
 
-Theorem hoare_split : forall (P P0 P1 Q Q0 Q1 : Assertion) c0 c1,
+Theorem hoare_split : forall (P P0 P1 Q Q0 Q1 : assertion) c0 c1,
   (forall st0 st1, P (st0 <*> st1) -> P0 st0 /\ P1 st1) ->
   (forall st0 st1, Q0 st0 /\ Q1 st1 -> Q (st0 <*> st1)) ->
   {{P0}} c0 {{Q0}} ->
@@ -424,7 +319,7 @@ Proof.
   firstorder.
 Qed.
 
-Theorem hoare_prod : forall (P Q R : Assertion) c0 c1,
+Theorem hoare_prod : forall (P Q R : assertion) c0 c1,
   (forall st1, {{right P st1}} c0 {{right R st1}}) ->
   (forall st0, {{left R st0}} c1 {{left Q st0}}) ->
   {{P}} c0 *** c1 {{Q}}.
@@ -434,14 +329,14 @@ Proof.
   eauto.
 Qed.
 
-Theorem hoare_cons : forall (P P' Q Q' : Assertion) c,
+Theorem hoare_cons : forall (P P' Q Q' : assertion) c,
   (forall st, P st -> P' st) ->
   (forall st, Q' st -> Q st) ->
   {{P'}} c {{Q'}} ->
   {{P}} c {{Q}}.
 Proof. firstorder. Qed.
 
-Theorem hoare_loop : forall (P : Assertion) c,
+Theorem hoare_loop : forall (P : assertion) c,
   {{P}} c {{P}} ->
   {{P}} LOOP { c } {{P}}.
 Proof.
@@ -450,51 +345,14 @@ Proof.
   induction H0; try (inversion Heqloop); clear Heqloop; subst; intuition; eauto.
 Qed.
 
-Definition example : com :=
-  0 ::= (alit 0) ;;
-  1 ::= (alit 0) ;;
-  2 ::= (alit 0) ;;
-  3 ::= (alit 0) ;;
-  LOOP {
-    ASSUME (bop olt (avar 1) (avar 4)) ;;
-    0 ::= aop oadd (avar 0) (avar 1) ;;
-    1 ::= aop oadd (avar 1) (alit 1)
-  } ;;
-  ASSUME (bop oge (avar 1) (avar 4)) ;;
-  LOOP {
-    ASSUME (bop olt (avar 3) (avar 4)) ;;
-    2 ::= aop oadd (avar 2) (avar 3) ;;
-    3 ::= aop oadd (avar 3) (alit 1)
-  } ;;
-  ASSUME (bop oge (avar 3) (avar 4)) ;;
-  ASSUME (bnot (bop oeq (avar 0) (avar 2))).
-
-Theorem example_valid : {{fun _ => True}} example {{fun _ => False}}.
-Proof.
-  unfold example.
-  eapply hoare_seq'.
-  eapply hoare_cons.
-  Focus 3.
-  eapply hoare_assign.
-  Focus 3.
-  eapply hoare_seq'.
-  eapply hoare_cons.
-  Focus 3.
-  eapply hoare_assign.
-  Focus 3.
-  eapply hoare_seq'.
-  eapply hoare_cons.
-  Focus 3.
-  eapply hoare_assign.
-  Focus 3.
-  eapply hoare_seq'.
-  eapply hoare_cons.
-  Focus 3.
-  eapply hoare_assign.
-  Focus 3.
-  eapply hoare_seq.
-  Focus 2.
-  eapply hoare_iso.
-  eapply iprod.
-  eapply isymm.
-  eapply iskipl.
+(* Theorem hoare_loop' : forall (P H : assertion) c, *)
+(*   {{P}} ASSUME H ;; c ;; ASSUME H {{P}} -> *)
+(*   {{fun st => P st /\ H st}} LOOP { c } {{fun st => P st /\ H st}}. *)
+(* Proof. *)
+(*   unfold triple; intros. *)
+(*   remember (LOOP { c }) as loop. *)
+(*   induction H1; try (inversion Heqloop); clear Heqloop; subst. *)
+(*   econstructor; econstructor; intuition; eauto. *)
+(*   econstructor. admit. *)
+(*   admit. *)
+(*   eauto. *)
