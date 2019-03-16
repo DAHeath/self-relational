@@ -38,7 +38,6 @@ Notation "'SKIP'" := cskip.
 
 Notation "st0 '<*>' st1" := (composite st0 st1) (at level 60, right associativity).
 
-Definition stempty : nat -> nat := fun x => 0.
 Definition stupdate x n st : nat -> nat := fun k => if k =? x then n else st k.
 
 Fixpoint aeval (st:nat -> nat) (e:aexpr) : nat :=
@@ -168,10 +167,17 @@ Proof.
     * eauto.
 Qed.
 
-Definition triple (P:assertion) (c:com) (Q:assertion) : Prop :=
-  forall st st', ceval c st st' -> P st -> Q st'.
+Definition left (P:assertion) st0 : assertion :=
+  fun st1 => P (st0 <*> st1).
 
-Notation "{{ P }} c {{ Q }}" := (triple P c Q) (at level 90, c at next level).
+Definition right (P:assertion) st1 : assertion :=
+  fun st0 => P (st0 <*> st1).
+
+Definition join (P : assertion) : assertion :=
+  fun st => match st with
+  | singleton _ => False
+  | composite st0 st1 => P st0 /\ st0 = st1
+  end.
 
 Definition assn_sub x e P : assertion :=
   fun (st : state) => match st with
@@ -186,6 +192,17 @@ Definition commute (P:assertion) : assertion :=
             | composite st0 st1 => P (composite st1 st0)
             end.
 
+Definition associate (P:assertion) : assertion :=
+  fun st => match st with
+  | composite (composite st0 st1) st2 => P (composite st0 (composite st1 st2))
+  | _ => False
+  end.
+
+Definition triple (P:assertion) (c:com) (Q:assertion) : Prop :=
+  forall st st', ceval c st st' -> P st -> Q st'.
+
+Notation "{{ P }} c {{ Q }}" := (triple P c Q) (at level 90, c at next level).
+
 Definition hoare_comm : forall P Q c0 c1,
   {{commute P}} c1 *** c0 {{commute Q}} ->
   {{P}} c0 *** c1 {{Q}}.
@@ -196,12 +213,6 @@ Proof.
   apply (H (st2 <*> st1) (st2' <*> st1') H2).
   auto.
 Qed.
-
-Definition associate (P:assertion) : assertion :=
-  fun st => match st with
-  | composite (composite st0 st1) st2 => P (composite st0 (composite st1 st2))
-  | _ => False
-  end.
 
 Theorem assoc : forall P Q c0 c1 c2,
   {{ associate P }} cprod (cprod c0 c1) c2 {{ associate Q }} ->
@@ -261,36 +272,6 @@ Proof.
   unfold triple; intros; inversion H1; inversion H5; subst; eauto.
 Qed.
 
-Definition pairwise (P:assertion) (Q:assertion) : assertion :=
-  fun st => match st with
-            | singleton st => False
-            | composite st0 st1 => P st0 /\ Q st1
-            end.
-
-Definition left (P:assertion) st0 : assertion :=
-  fun st1 => P (st0 <*> st1).
-
-Definition right (P:assertion) st1 : assertion :=
-  fun st0 => P (st0 <*> st1).
-
-Definition const_l (P:assertion) : assertion :=
-  fun st => match st with
-  | singleton _ => False
-  | composite st0 st1 => P st0
-  end.
-
-Definition const_r (P:assertion) : assertion :=
-  fun st => match st with
-  | singleton _ => False
-  | composite st0 st1 => P st1
-  end.
-
-Definition join (P : assertion) : assertion :=
-  fun st => match st with
-  | singleton _ => False
-  | composite st0 st1 => P st0 /\ st0 = st1
-  end.
-
 Theorem hoare_seq : forall (P Q R S : assertion) c0 c1,
   {{join P}} SKIP *** c0 {{R}} ->
   {{R}} c0 *** c1 {{S}} ->
@@ -304,19 +285,6 @@ Proof.
   eapply H0; eauto.
   eapply H; eauto.
   simpl; eauto.
-Qed.
-
-Theorem hoare_split : forall (P P0 P1 Q Q0 Q1 : assertion) c0 c1,
-  (forall st0 st1, P (st0 <*> st1) -> P0 st0 /\ P1 st1) ->
-  (forall st0 st1, Q0 st0 /\ Q1 st1 -> Q (st0 <*> st1)) ->
-  {{P0}} c0 {{Q0}} ->
-  {{P1}} c1 {{Q1}} ->
-  {{P}} c0 *** c1 {{Q}}.
-Proof.
-  unfold triple; intros.
-  inversion H3; subst.
-  eapply H0.
-  firstorder.
 Qed.
 
 Theorem hoare_prod : forall (P Q R : assertion) c0 c1,
@@ -344,15 +312,3 @@ Proof.
   remember (LOOP { c }) as loop.
   induction H0; try (inversion Heqloop); clear Heqloop; subst; intuition; eauto.
 Qed.
-
-(* Theorem hoare_loop' : forall (P H : assertion) c, *)
-(*   {{P}} ASSUME H ;; c ;; ASSUME H {{P}} -> *)
-(*   {{fun st => P st /\ H st}} LOOP { c } {{fun st => P st /\ H st}}. *)
-(* Proof. *)
-(*   unfold triple; intros. *)
-(*   remember (LOOP { c }) as loop. *)
-(*   induction H1; try (inversion Heqloop); clear Heqloop; subst. *)
-(*   econstructor; econstructor; intuition; eauto. *)
-(*   econstructor. admit. *)
-(*   admit. *)
-(*   eauto. *)
