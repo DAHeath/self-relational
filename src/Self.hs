@@ -1,4 +1,5 @@
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE MultiWayIf #-}
 {-# LANGUAGE TemplateHaskell #-}
 module Self where
@@ -7,8 +8,11 @@ import Control.Lens
 import Control.Monad.State
 import Control.Monad.Writer hiding (Sum)
 import Control.Monad.Reader
+import Control.Monad.Except
 import qualified Data.Set as S
 import           Data.Set (Set)
+import qualified Data.Map as M
+import           Data.Map (Map)
 import           Data.List (intercalate)
 
 import Debug.Trace
@@ -20,8 +24,6 @@ data Expr
   = ALit Integer
   | Add Expr Expr
   | V Var
-  | Store Expr Expr Expr
-  | Select Expr Expr
   deriving (Show, Read, Eq, Ord)
 
 esubst :: Var -> Expr -> Expr -> Expr
@@ -29,8 +31,6 @@ esubst x e = \case
   ALit i -> ALit i
   Add e0 e1 -> Add (go e0) (go e1)
   V v -> if v == x then e else V v
-  Store e0 e1 e2 -> Store (go e0) (go e1) (go e2)
-  Select e0 e1 -> Select (go e0) (go e1)
   where
     go = esubst x e
 
@@ -42,15 +42,17 @@ erename c = \case
   ALit i -> ALit i
   V v -> V (vrename c v)
   Add a0 a1 -> Add (erename c a0) (erename c a1)
-  Store a0 a1 a2 -> Store (erename c a0) (erename c a1) (erename c a2)
-  Select a0 a1 -> Select (erename c a0) (erename c a1)
+
+elookup :: (Map Var Expr) -> Expr -> Expr
+elookup m = \case
+  ALit i -> ALit i
+  V v -> M.findWithDefault (V v) v m
+  Add a0 a1 -> Add (elookup m a0) (elookup m a1)
 
 evocab :: Expr -> Set Var
 evocab = \case
   V v -> S.singleton v
   Add e0 e1 -> S.union (evocab e0) (evocab e1)
-  Store e0 e1 e2 -> S.unions [evocab e0, evocab e1, evocab e2]
-  Select e0 e1 -> S.union (evocab e0) (evocab e1)
   ALit{} -> S.empty
 
 type ID = Int
@@ -61,13 +63,11 @@ data Prop
   | F
   | Not Prop
   | And Prop Prop
-  | Or Prop Prop
   | Impl Prop Prop
   | Eql Expr Expr
   | Lt Expr Expr
   | Ge Expr Expr
   | Rel ID [Expr]
-  | Star
   deriving (Show, Read, Eq, Ord)
 
 pand :: Prop -> Prop -> Prop
@@ -83,13 +83,11 @@ psubst x e = \case
   F -> F
   Not p -> Not (go p)
   And p0 p1 -> And (go p0) (go p1)
-  Or p0 p1 -> Or (go p0) (go p1)
   Impl p0 p1 -> Impl (go p0) (go p1)
   Eql e0 e1 -> Eql (goe e0) (goe e1)
   Lt e0 e1 -> Lt (goe e0) (goe e1)
   Ge e0 e1 -> Ge (goe e0) (goe e1)
   Rel i es -> Rel i (map goe es)
-  Star -> Star
   where
     go = psubst x e
     goe = esubst x e
@@ -100,15 +98,27 @@ prename i = \case
   F -> F
   Not p -> Not (go p)
   And p0 p1 -> And (go p0) (go p1)
-  Or p0 p1 -> Or (go p0) (go p1)
   Impl p0 p1 -> Impl (go p0) (go p1)
   Eql e0 e1 -> Eql (goe e0) (goe e1)
   Lt e0 e1 -> Lt (goe e0) (goe e1)
   Ge e0 e1 -> Ge (goe e0) (goe e1)
-  Star -> Star
   where
     go = prename i
     goe = erename i
+
+plookup :: (Map Var Expr) -> Prop -> Prop
+plookup m = \case
+  T -> T
+  F -> F
+  Not p -> Not (go p)
+  And p0 p1 -> And (go p0) (go p1)
+  Impl p0 p1 -> Impl (go p0) (go p1)
+  Eql e0 e1 -> Eql (goe e0) (goe e1)
+  Lt e0 e1 -> Lt (goe e0) (goe e1)
+  Ge e0 e1 -> Ge (goe e0) (goe e1)
+  where
+    go = plookup m
+    goe = elookup m
 
 pvocab :: Prop -> Set Var
 pvocab = \case
@@ -116,66 +126,56 @@ pvocab = \case
   F -> S.empty
   Not p -> pvocab p
   And p0 p1 -> S.union (pvocab p0) (pvocab p1)
-  Or p0 p1 -> S.union (pvocab p0) (pvocab p1)
   Impl p0 p1 -> S.union (pvocab p0) (pvocab p1)
   Eql e0 e1 -> S.union (evocab e0) (evocab e1)
   Lt e0 e1 -> S.union (evocab e0) (evocab e1)
   Ge e0 e1 -> S.union (evocab e0) (evocab e1)
   Rel _ es -> S.unions (map evocab es)
-  Star -> S.empty
 
-propRels :: Prop -> Set (ID, [()])
+propRels :: Prop -> Set (ID, Int)
 propRels = \case
   T -> S.empty
   F -> S.empty
   Not p -> propRels p
   And p0 p1 -> propRels p0 `S.union` propRels p1
-  Or p0 p1 -> propRels p0 `S.union` propRels p1
   Impl p0 p1 -> propRels p0 `S.union` propRels p1
   Eql{} -> S.empty
   Lt{} -> S.empty
   Ge{} -> S.empty
-  Rel i es -> S.singleton (i, map (const ()) es)
-  Star -> S.empty
+  Rel i es -> S.singleton (i, length es)
 
 -- | The space of non-deterministic imperative commands.
 data Com
   = Assign Var Expr
-  | Havoc Var
   | Assert Prop
   | Skip
   | Seq Com Com
   | If Prop Com Com
   | Sum Com Com
   | Prod Com Com
-  | Loop Com
+  | While [(Prop, Com)]
   deriving (Show, Read, Eq, Ord)
-
-mseq :: [Com] -> Com
-mseq = foldr1 Seq
 
 cvocab :: Com -> Set Var
 cvocab = \case
   Assign v e -> S.insert v $ evocab e
-  Havoc v -> S.singleton v
   Assert p -> pvocab p
   Skip -> S.empty
   Seq c0 c1 -> cvocab c0 `S.union` cvocab c1
   If p c0 c1 -> pvocab p `S.union` cvocab c0 `S.union` cvocab c1
   Sum c0 c1 -> cvocab c0 `S.union` cvocab c1
   Prod c0 c1 -> cvocab c0 `S.union` cvocab c1
-  Loop c -> cvocab c
+  While bodies -> foldMap (\(b, c) -> pvocab b `S.union` cvocab c) bodies
 
 loopless :: Com -> Bool
 loopless = \case
-  Loop{} -> False
+  While{} -> False
   If _ c0 c1 -> loopless c0 && loopless c1
   Sum c0 c1 -> loopless c0 && loopless c1
   Prod c0 c1 -> loopless c0 && loopless c1
   Seq c0 c1 -> loopless c0 && loopless c1
   Assert{} -> True
   Assign{} -> True
-  Havoc{} -> True
   Skip -> True
 
 looplessStart :: Com -> Bool
@@ -194,8 +194,7 @@ mergeLoops = \case
     let c0' = mergeLoops c0
         c1' = mergeLoops c1
     in case (c0', c1') of
-         (Loop c0, Loop c1) ->
-           Loop (Sum (Prod c0 Skip) (Prod Skip c1))
+         (While b0, While b1) -> While (b0 ++ b1)
          _ -> Prod c0' c1'
   c -> c
 
@@ -258,14 +257,11 @@ temporary = do
 quantify :: Prop -> QProp
 quantify p = Forall (S.toList (pvocab p)) p
 
-por :: [Prop] -> Prop
-por = foldr1 Or
-
 (/\) :: [Prop] -> Prop -> [Prop]
 (/\) ps p = map (`pand` p) ps
 
 (==>) :: [Prop] -> Prop -> M ()
-(==>) ps q = tell [quantify $ por ps `Impl` q]
+(==>) ps q = mapM_ (\p ->tell [quantify (p `Impl` q)]) ps
 
 equiv :: St -> St -> M Prop
 equiv (Composite st0 st1) (Composite st2 st3) = pand <$> equiv st0 st2 <*> equiv st1 st3
@@ -291,21 +287,8 @@ double ac = do
     flatten (Singleton c) = [c]
     flatten (Composite st0 st1) = flatten st0 ++ flatten st1
 
-organize :: M a -> M a
-organize = local (theState %~ arrange)
-  where
-    arrange :: St -> St
-    arrange = foldr1 Composite . enumerate
-    enumerate :: St -> [St]
-    enumerate = \case
-      Singleton st -> [Singleton st]
-      Composite st0 st1 -> enumerate st0 ++ enumerate st1
-
 triple :: Com -> [Prop] -> M [Prop]
-triple c p = do
-  st <- view theState
-  traceM (show st)
-  traceM (showCom (mergeLoops c)) >> traceM ""
+triple c p =
   case mergeLoops c of
     Skip -> pure p
     Assign x a -> do
@@ -314,13 +297,6 @@ triple c p = do
       let x' = vrename st x
       pure $
         map (\p -> psubst x' (V t) p `pand` (Eql (V x') (esubst x' (V t) (erename st a)))) p
-    Havoc x -> do
-      t <- temporary
-      Singleton st <- view theState
-      let x' = vrename st x
-      pure $ map (\p -> psubst x' (V t) p) p
-    Assert Star -> pure p
-    Assert (Not Star) -> pure p
     Assert e -> do
       Singleton st <- view theState
       pure (p /\ (prename st e))
@@ -334,9 +310,7 @@ triple c p = do
               Seq c1' c1'' -> triple (Seq (Seq c0 c1') c1'') p
               c -> triple c0 p >>= triple c1
          | otherwise ->
-           case c1 of
-             Seq c1' c1'' -> triple (Seq (Seq c0 c1') c1'') p
-             _ -> double (do
+            double (do
               Composite st0 st1 <- view theState
               eq <- equiv st0 st1
               q <- triple (Prod Skip c0) (p /\ eq)
@@ -349,12 +323,16 @@ triple c p = do
       q0 <- triple c0 p
       q1 <- triple c1 p
       pure (q0 ++ q1)
-    Loop c -> do
+    While bodies -> do
       r <- rel
       p ==> r
-      q <- triple c [r]
-      q ==> r
-      pure [r]
+      let (exit : cs) =
+            map (foldr1 Prod) $
+            sequence $
+            map (\(b, c) -> [Assert (Not b), Seq (Assert b) c]) bodies
+      qs <- traverse (`triple` [r]) cs
+      concat qs ==> r
+      triple exit [r]
     Prod c0 c1 ->
       if loopless c0 || loopless c1
       then do
@@ -366,7 +344,7 @@ triple c p = do
             triple (Prod c0 (Sum (Seq (Assert b) c1') (Seq (Assert (Not b)) c1''))) p
           Sum c1' c1'' -> triple (Sum (Prod c0 c1') (Prod c0 c1'')) p
           Prod c1' c1'' -> associate (triple (Prod (Prod c0 c1') c1'') p)
-          Loop{} -> commute (triple (Prod c1 c0) p)
+          While c1' -> commute (triple (Prod (While c1') c0) p)
           Seq c1' c1'' ->
             if loopless c1'
             then triple (Seq (Prod Skip c1') (Prod c0 c1'')) p
@@ -385,12 +363,14 @@ showCom :: Com -> String
 showCom = \case
   Skip -> "skip"
   Assign v e -> v ++ " := " ++ smt2Expr e
-  Havoc v -> "havoc " ++ v
   Assert e -> "assert " ++ smt2Prop e
   Seq c0 c1 -> showCom c0 ++ ";\n" ++ showCom c1
   Sum c0 c1 -> "{" ++ showCom c0 ++ "} +\n {" ++ showCom c1 ++ "}"
   Prod c0 c1 -> "{" ++ showCom c0 ++ "} *\n {" ++ showCom c1 ++ "}"
-  Loop c -> "LOOP " ++ " {\n" ++ showCom c ++ "}"
+  While bs -> "While {\n" ++
+    intercalate "\n  " (map showBody bs) ++ "}"
+      where showBody :: (Prop, Com) -> String
+            showBody (p, c) = smt2Prop p ++ " -> " ++ showCom c
 
 sexpr :: [String] -> String
 sexpr ss = "(" ++ unwords ss ++ ")"
@@ -402,7 +382,7 @@ smt2 c = unlines [header, decls, body, footer]
                      , sexpr ["set-option", ":fixedpoint.engine", "\"duality\""]
                      ]
     footer = unlines [ sexpr ["check-sat"], sexpr ["get-model"] ]
-    decl (i, ks) = sexpr ["declare-fun", "R" ++ show i, sexpr (map (const "Int") ks), "Bool"]
+    decl (i, n) = sexpr ["declare-fun", "R" ++ show i, sexpr (replicate n "Int"), "Bool"]
     decls = unlines $ map decl (S.toList rels)
     body = unlines (map smt2QProp qs)
     qs = hoare c
@@ -421,8 +401,6 @@ smt2Expr :: Expr -> String
 smt2Expr = \case
   ALit i -> show i
   Add a0 a1 -> sexpr ["+", smt2Expr a0, smt2Expr a1]
-  Store a0 a1 a2 -> sexpr ["store", smt2Expr a0, smt2Expr a1, smt2Expr a2]
-  Select a0 a1 -> sexpr ["select", smt2Expr a0, smt2Expr a1]
   V v -> v
 
 smt2Prop :: Prop -> String
@@ -431,60 +409,44 @@ smt2Prop = \case
   F -> "false"
   Not p -> sexpr ["not", smt2Prop p]
   And p0 p1 -> sexpr ("and" : map smt2Prop (conjuncts p0 ++ conjuncts p1))
-  Or p0 p1 -> sexpr ("or" : map (("\n" ++) . smt2Prop) (disjuncts p0 ++ disjuncts p1))
-  Impl p0 p1 -> sexpr ["=>", smt2Prop p0, "\n", smt2Prop p1]
+  Impl p0 p1 -> sexpr ["=>", smt2Prop p0, smt2Prop p1]
   Eql e0 e1 -> sexpr ["=", smt2Expr e0, smt2Expr e1]
   Lt e0 e1 -> sexpr ["<", smt2Expr e0, smt2Expr e1]
   Ge e0 e1 -> sexpr [">=", smt2Expr e0, smt2Expr e1]
   Rel i es -> sexpr (("R" ++ show i) : map smt2Expr es)
-  Star -> undefined
   where
-    conjuncts, disjuncts :: Prop -> [Prop]
+    conjuncts :: Prop -> [Prop]
     conjuncts (And p0 p1) = conjuncts p0 ++ conjuncts p1
     conjuncts p = [p]
-    disjuncts (Or p0 p1) = disjuncts p0 ++ disjuncts p1
-    disjuncts p = [p]
 
--- example :: Com
--- example =
---   Assign "x" (ALit 0) `Seq`
---   Assign "x" (Add (V "x") (ALit 1)) `Seq`
---   -- Assign "x" (Add (V "x") (ALit 1)) `Seq`
---   Assert (Not (Eql (V "x") (ALit 1)))
+example :: Com
+example =
+  Assign "x" (ALit 0) `Seq`
+  Assign "x" (Add (V "x") (ALit 1)) `Seq`
+  -- Assign "x" (Add (V "x") (ALit 1)) `Seq`
+  Assert (Not (Eql (V "x") (ALit 1)))
 
--- example2 :: Com
--- example2 =
---   If (Eql (V "x") (ALit 0))
---      (Assign "x" (ALit 0))
---      (Assign "x" (ALit 1)) `Seq`
---   Assert (Lt (V "x") (ALit 0))
+example2 :: Com
+example2 =
+  If (Eql (V "x") (ALit 0))
+     (Assign "x" (ALit 0))
+     (Assign "x" (ALit 1)) `Seq`
+  Assert (Lt (V "x") (ALit 0))
 
 example3 :: Com
 example3 =
-  mseq
-    [ Assign s0 (ALit 0)
-    , Assign s1 (ALit 0)
-    , Assign i0 (ALit 0)
-    , Assign i1 (ALit 0)
-    , Loop $
-        mseq
-          [ Assert (Lt (V i0) (V n))
-          , Assign s0 (Add (V s0) (V i0))
-          , Assign i0 (Add (V i0) (ALit 1))
-          ]
-    , Assert (Ge (V i0) (V n))
-    , Loop $
-        mseq
-          [ Assert (Lt (V i1) (V n))
-          , Assign s1 (Add (V s1) (V i1))
-          , Assign i1 (Add (V i1) (ALit 1))
-          ]
-    , Assert (Ge (V i1) (V n))
-    , Assert (Not (Eql (V s0) (V s1)))
-    ]
-  where
-    s0 = "s0"
-    s1 = "s1"
-    i0 = "i0"
-    i1 = "i1"
-    n = "n"
+  Assign "s0" (ALit 0) `Seq`
+  Assign "s1" (ALit 0) `Seq`
+  Assign "i0" (ALit 0) `Seq`
+  Assign "i1" (ALit 0) `Seq`
+  While [
+    ( Lt (V "i0") (V "n")
+    , Assign "s0" (Add (V "s0") (V "i0")) `Seq`
+      Assign "i0" (Add (V "i0") (ALit 1))
+    )] `Seq`
+  While [
+    ( Lt (V "i1") (V "n")
+    , Assign "s1" (Add (V "s1") (V "i1")) `Seq`
+      Assign "i1" (Add (V "i1") (ALit 1))
+    )] `Seq`
+  Assert (Not (Eql (V "s0") (V "s1")))
