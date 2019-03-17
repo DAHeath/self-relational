@@ -15,6 +15,8 @@ import qualified Data.Map as M
 import           Data.Map (Map)
 import           Data.List (intercalate)
 
+import Debug.Trace
+
 type Var = String
 
 -- | The space of arithmetic expressions.
@@ -268,10 +270,8 @@ quantify p = Forall (S.toList (pvocab p)) p
 (/\) :: [Prop] -> Prop -> [Prop]
 (/\) ps p = map (`pand` p) ps
 
-(==>) :: [Prop] -> Prop -> M ()
-(==>) ps q =
-  let p = foldr por F ps
-    in tell [quantify (p `Impl` q)]
+(==>) :: Prop -> Prop -> M ()
+(==>) p q = tell [quantify (p `Impl` q)]
 
 equiv :: St -> St -> M Prop
 equiv (Composite st0 st1) (Composite st2 st3) = pand <$> equiv st0 st2 <*> equiv st1 st3
@@ -297,7 +297,7 @@ double ac = do
     flatten (Singleton c) = [c]
     flatten (Composite st0 st1) = flatten st0 ++ flatten st1
 
-triple :: Com -> [Prop] -> M [Prop]
+triple :: Com -> Prop -> M Prop
 triple c p =
   case mergeLoops c of
     Skip -> pure p
@@ -305,11 +305,10 @@ triple c p =
       t <- temporary
       Singleton st <- view theState
       let x' = vrename st x
-      pure $
-        map (\p -> psubst x' (V t) p `pand` (Eql (V x') (esubst x' (V t) (erename st a)))) p
+      pure $ psubst x' (V t) p `pand` (Eql (V x') (esubst x' (V t) (erename st a)))
     Assert e -> do
       Singleton st <- view theState
-      pure (p /\ (prename st e))
+      pure (p `pand` (prename st e))
     Seq c0 c1 ->
       if | looplessStart c0 ->
             case c0 of
@@ -323,25 +322,27 @@ triple c p =
             double (do
               Composite st0 st1 <- view theState
               eq <- equiv st0 st1
-              q <- triple (Prod Skip c0) (p /\ eq)
+              q <- triple (Prod Skip c0) (p `pand` eq)
                     >>= triple (Prod c0 c1)
                     >>= triple (Prod c1 Skip)
-              pure (q /\ eq))
+              pure (q `pand` eq))
     Sum c0 c1 -> do
       q0 <- triple c0 p
       q1 <- triple c1 p
-      pure (q0 ++ q1)
+      pure (q0 `por` q1)
     Loop c -> do
       r <- rel
       p ==> r
-      q <- triple c [r]
+      q <- triple c r
       q ==> r
-      pure [r]
+      pure r
     Prod c0 c1 ->
       if loopless c0 || loopless c1
       then do
-        r <- left (triple c0 p)
-        right (triple c1 r)
+        -- THERE IS AN ISSUE HERE
+        q0 <- left (triple c0 p)
+        q1 <- right (triple c1 p)
+        pure (q0 `pand` q1)
       else
         case c1 of
           Sum c1' c1'' -> triple (Sum (Prod c0 c1') (Prod c0 c1'')) p
@@ -358,8 +359,8 @@ hoare c =
   let ctx = initialEnv c
    in execWriter $ evalStateT (runReaderT
         (do
-          qs <- triple c [T]
-          qs ==> F) ctx) initialCtxt
+          q <- triple c T
+          q ==> F) ctx) initialCtxt
 
 showCom :: Com -> String
 showCom = \case
@@ -448,3 +449,36 @@ example3 =
     ) `Seq`
   Assert (Not (Lt (V "i1") (V "n"))) `Seq`
   Assert (Not (Eql (V "s0") (V "s1")))
+
+loopFusion :: Com
+loopFusion =
+  Assign "s0" (ALit 0) `Seq`
+  Assign "s1" (ALit 0) `Seq`
+  Assign "i" (ALit 0) `Seq`
+  Loop (Sum ( Assert (Lt (V "i") (V "n")) `Seq`
+              Assign "s0" (Add (V "s0") (V "i")) `Seq`
+              Assign "s1" (Add (V "s1") (V "i")) `Seq`
+              Assign "i" (Add (V "i") (ALit 1))
+            ) (Assert (Not (Lt (V "i") (V "n"))))
+    ) `Seq`
+    Assert (Not (Lt (V "i") (V "n"))) `Seq`
+
+  Assign "s2" (ALit 0) `Seq`
+  Assign "i" (ALit 0) `Seq`
+  Loop (Sum ( Assert (Lt (V "i") (V "n")) `Seq`
+              Assign "s2" (Add (V "s2") (V "i")) `Seq`
+              Assign "i" (Add (V "i") (ALit 1))
+            ) (Assert (Not (Lt (V "i") (V "n"))))
+    ) `Seq`
+    Assert (Not (Lt (V "i") (V "n"))) `Seq`
+
+  Assign "s3" (ALit 0) `Seq`
+  Assign "i" (ALit 0) `Seq`
+  Loop (Sum ( Assert (Lt (V "i") (V "n")) `Seq`
+              Assign "s3" (Add (V "s3") (V "i")) `Seq`
+              Assign "i" (Add (V "i") (ALit 1))
+            ) (Assert (Not (Lt (V "i") (V "n"))))
+    ) `Seq`
+    Assert (Not (Lt (V "i") (V "n"))) `Seq`
+
+  Assert (Not (And (Eql (V "s0") (V "s2")) (Eql (V "s1") (V "s3"))))

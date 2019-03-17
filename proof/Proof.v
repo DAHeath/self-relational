@@ -183,6 +183,12 @@ Definition left (P:assertion) st0 : assertion :=
 Definition right (P:assertion) st1 : assertion :=
   fun st0 => P (st0 <*> st1).
 
+Definition split (P Q:assertion) : assertion :=
+  fun st => match st with
+  | singleton _ => False
+  | composite st0 st1 => P st0 /\ Q st1
+  end.
+
 Definition join (P : assertion) : assertion :=
   fun st => match st with
   | singleton _ => False
@@ -306,6 +312,11 @@ Proof.
   inversion H1; subst.
   eauto.
 Qed.
+
+Theorem hoare_prod2 : forall (P0 P1 Q0 Q1 : assertion) c0 c1,
+  {{P0}} c0 {{Q0}} ->
+  {{P1}} c1 {{Q1}} ->
+  {{split P0 P1}} c0 *** c1 {{split Q0 Q1}}.
 
 Theorem hoare_cons : forall (P P' Q Q' : assertion) c,
   (forall st, P st -> P' st) ->
