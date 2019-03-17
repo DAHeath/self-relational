@@ -15,8 +15,6 @@ import qualified Data.Map as M
 import           Data.Map (Map)
 import           Data.List (intercalate)
 
-import Debug.Trace
-
 type Var = String
 
 -- | The space of arithmetic expressions.
@@ -166,8 +164,6 @@ data Com
   | Sum Com Com
   | Prod Com Com
   | Loop Com
-  | SLoop Com -- To prevent an infinite recursion, add a loop type which
-              -- is not to be placed in a product with other loops
   deriving (Show, Read, Eq, Ord)
 
 cvocab :: Com -> Set Var
@@ -179,12 +175,10 @@ cvocab = \case
   Sum c0 c1 -> cvocab c0 `S.union` cvocab c1
   Prod c0 c1 -> cvocab c0 `S.union` cvocab c1
   Loop c -> cvocab c
-  SLoop c -> cvocab c
 
 loopless :: Com -> Bool
 loopless = \case
   Loop{} -> False
-  SLoop{} -> True -- Prevent SLoop from being grouped in a product
   Sum c0 c1 -> loopless c0 && loopless c1
   Prod c0 c1 -> loopless c0 && loopless c1
   Seq c0 c1 -> loopless c0 && loopless c1
@@ -208,9 +202,7 @@ mergeLoops = \case
     let c0' = mergeLoops c0
         c1' = mergeLoops c1
     in case (c0', c1') of
-         (Loop c0, Loop c1) ->
-           -- Loop (c0 `Prod` c1) `Seq` (SLoop c0 `Prod` Skip) `Seq` (Skip `Prod` SLoop c1)
-           Loop (c0 `Prod` c1)
+         (Loop c0, Loop c1) -> Loop (c0 `Prod` c1)
          _ -> Prod c0' c1'
   c -> c
 
@@ -307,7 +299,6 @@ double ac = do
 
 triple :: Com -> [Prop] -> M [Prop]
 triple c p =
-  trace (showCom c) $
   case mergeLoops c of
     Skip -> pure p
     Assign x a -> do
@@ -346,12 +337,6 @@ triple c p =
       q <- triple c [r]
       q ==> r
       pure [r]
-    SLoop c -> do
-      r <- rel
-      p ==> r
-      q <- triple c [r]
-      q ==> r
-      pure [r]
     Prod c0 c1 ->
       if loopless c0 || loopless c1
       then do
@@ -362,7 +347,6 @@ triple c p =
           Sum c1' c1'' -> triple (Sum (Prod c0 c1') (Prod c0 c1'')) p
           Prod c1' c1'' -> associate (triple (Prod (Prod c0 c1') c1'') p)
           Loop c1' -> commute (triple (Prod (Loop c1') c0) p)
-          SLoop c1' -> commute (triple (Prod (SLoop c1') c0) p)
           Seq c1' c1'' ->
             if loopless c1'
             then triple (Seq (Prod Skip c1') (Prod c0 c1'')) p
@@ -386,7 +370,6 @@ showCom = \case
   Sum c0 c1 -> "{" ++ showCom c0 ++ "} +\n {" ++ showCom c1 ++ "}"
   Prod c0 c1 -> "{" ++ showCom c0 ++ "} *\n {" ++ showCom c1 ++ "}"
   Loop c -> "Loop {" ++ showCom c ++ "}"
-  SLoop c -> "Loop {" ++ showCom c ++ "}"
 
 sexpr :: [String] -> String
 sexpr ss = "(" ++ unwords ss ++ ")"

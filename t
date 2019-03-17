@@ -15,11 +15,7 @@
    (=> (and (R0 i0_0 i1_0 n_0 s0_0 s1_0 i0_1 i1_1 n_1 s0_1 s1_1) (not (< i0_1 n_1))) (R1 i0_0 i1_0 n_0 s0_0 s1_0 i0_1 i1_1 n_1 s0_1 s1_1))))
 
 (assert (forall ((V6 Int) (V7 Int) (V8 Int) (V9 Int) (i0_0 Int) (i0_1 Int) (i1_0 Int) (i1_1 Int) (n_0 Int) (n_1 Int) (s0_0 Int) (s0_1 Int) (s1_0 Int) (s1_1 Int))
-   (=> (or (and (R1 V9 i1_0 n_0 V8 s1_0 i0_1 V7 n_1 s0_1 V6) (< V7 n_1) (= s1_1 (+ V6 V7)) (= i1_1 (+ V7 1)) (< V9 n_0) (= s0_0 (+ V8 V9)) (= i0_0 (+ V9 1)))
-           (and (R1 V9 i1_0 n_0 V8 s1_0 i0_1 i1_1 n_1 s0_1 s1_1) (not (< i1_1 n_1)) (< V9 n_0) (= s0_0 (+ V8 V9)) (= i0_0 (+ V9 1)))
-           (and (R1 i0_0 i1_0 n_0 s0_0 s1_0 i0_1 V7 n_1 s0_1 V6) (< V7 n_1) (= s1_1 (+ V6 V7)) (= i1_1 (+ V7 1)) (not (< i0_0 n_0)))
-           (and (R1 i0_0 i1_0 n_0 s0_0 s1_0 i0_1 i1_1 n_1 s0_1 s1_1) (not (< i1_1 n_1)) (not (< i0_0 n_0))))
-         (R1 i0_0 i1_0 n_0 s0_0 s1_0 i0_1 i1_1 n_1 s0_1 s1_1))))
+   (=> (or (and (R1 V9 i1_0 n_0 V8 s1_0 i0_1 V7 n_1 s0_1 V6) (< V7 n_1) (= s1_1 (+ V6 V7)) (= i1_1 (+ V7 1)) (< V9 n_0) (= s0_0 (+ V8 V9)) (= i0_0 (+ V9 1))) (and (R1 V9 i1_0 n_0 V8 s1_0 i0_1 i1_1 n_1 s0_1 s1_1) (not (< i1_1 n_1)) (< V9 n_0) (= s0_0 (+ V8 V9)) (= i0_0 (+ V9 1))) (and (R1 i0_0 i1_0 n_0 s0_0 s1_0 i0_1 V7 n_1 s0_1 V6) (< V7 n_1) (= s1_1 (+ V6 V7)) (= i1_1 (+ V7 1)) (not (< i0_0 n_0))) (and (R1 i0_0 i1_0 n_0 s0_0 s1_0 i0_1 i1_1 n_1 s0_1 s1_1) (not (< i1_1 n_1)) (not (< i0_0 n_0)))) (R1 i0_0 i1_0 n_0 s0_0 s1_0 i0_1 i1_1 n_1 s0_1 s1_1))))
 
 (assert (forall ((i0_0 Int) (i0_1 Int) (i1_0 Int) (i1_1 Int) (n_0 Int) (n_1 Int) (s0_0 Int) (s0_1 Int) (s1_0 Int) (s1_1 Int))
    (=> (and (R1 i0_0 i1_0 n_0 s0_0 s1_0 i0_1 i1_1 n_1 s0_1 s1_1) (not (< i0_0 n_0))) (R2 i0_0 i1_0 n_0 s0_0 s1_0 i0_1 i1_1 n_1 s0_1 s1_1))))
