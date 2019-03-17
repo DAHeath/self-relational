@@ -167,61 +167,13 @@ Proof.
     * eauto.
 Qed.
 
-Lemma loop_prod_l_skip : forall c st st' st'',
-  ceval (LOOP { c }) st st' -> ceval (LOOP { c *** SKIP }) (st <*> st'') (st' <*> st'').
-Proof.
-  intros.
-  remember (LOOP { c }) as loop.
-  induction H; try (inversion Heqloop); subst; intuition; eauto.
-Qed.
-
-Lemma loop_prod_r_skip : forall c st st' st'',
-  ceval (LOOP { c }) st st' -> ceval (LOOP { SKIP *** c }) (st'' <*> st) (st'' <*> st').
-Proof.
-  intros.
-  remember (LOOP { c }) as loop.
-  induction H; try (inversion Heqloop); subst; intuition; eauto.
-Qed.
-
 Theorem iloop_prod2 : forall c0 c1,
   LOOP { c0 } *** LOOP { c1 } ~>
-  LOOP { c0 *** c1 } ;; (LOOP { c0 *** SKIP } ;; LOOP { SKIP *** c1 }).
+  LOOP { c0 *** c1 } ;; ((LOOP { c0 } *** SKIP) ;; (SKIP *** LOOP { c1 })).
 Proof.
   unfold supersedes; intros.
   inversion H; subst; clear H.
-  remember (LOOP {c0}) as loop0.
-  remember (LOOP {c1}) as loop1.
-  induction H2, H5; try (inversion Heqloop0) ; try (inversion Heqloop1)
-                  ; clear Heqloop0 ; clear Heqloop1
-                  ; subst; intuition; try (clear IHceval1).
-  - inversion H; subst; clear H.
-    inversion H5; subst; clear H5.
-    econstructor.
-    econstructor.
-    econstructor; eauto.
-    eauto.
-    econstructor.
-    eapply loop_prod_l_skip. eauto.
-    eapply loop_prod_r_skip. eauto.
-  - inversion H; subst; clear H.
-    inversion H5; subst; clear H5.
-    econstructor.
-    eapply EBreak.
-    econstructor.
-    econstructor.
-    eauto.
-    eapply loop_prod_l_skip. eauto.
-    eapply loop_prod_r_skip. eauto.
-  - econstructor.
-    eapply EBreak.
-    econstructor.
-    eapply EBreak.
-    eapply loop_prod_r_skip. eauto.
-  - econstructor.
-    eapply EBreak.
-    econstructor.
-    eapply EBreak.
-    eapply EBreak.
+  inversion H2; inversion H5; subst; eauto.
 Qed.
 
 
