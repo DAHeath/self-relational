@@ -148,7 +148,7 @@ data Com
   | If Prop Com Com
   | Sum Com Com
   | Prod Com Com
-  | Loop [Var] {- the iterators -} Com
+  | Loop Com
   deriving (Show, Read, Eq, Ord)
 
 mseq :: [Com] -> Com
@@ -164,7 +164,7 @@ cvocab = \case
   If p c0 c1 -> pvocab p `S.union` cvocab c0 `S.union` cvocab c1
   Sum c0 c1 -> cvocab c0 `S.union` cvocab c1
   Prod c0 c1 -> cvocab c0 `S.union` cvocab c1
-  Loop is c -> S.union (S.fromList is) cvocab c
+  Loop c -> cvocab c
 
 loopless :: Com -> Bool
 loopless = \case
@@ -194,8 +194,9 @@ mergeLoops = \case
     let c0' = mergeLoops c0
         c1' = mergeLoops c1
     in case (c0', c1') of
-         (Loop is0 c0, Loop is1 c1) ->
+         (Loop c0, Loop c1) ->
            Loop (Sum (Prod c0 Skip) (Prod Skip c1))
+         _ -> Prod c0' c1'
   c -> c
 
 data St = Singleton Int | Composite St St
@@ -348,7 +349,7 @@ triple c p = do
       q0 <- triple c0 p
       q1 <- triple c1 p
       pure (q0 ++ q1)
-    Loop is c -> do
+    Loop c -> do
       r <- rel
       p ==> r
       q <- triple c [r]
@@ -389,7 +390,7 @@ showCom = \case
   Seq c0 c1 -> showCom c0 ++ ";\n" ++ showCom c1
   Sum c0 c1 -> "{" ++ showCom c0 ++ "} +\n {" ++ showCom c1 ++ "}"
   Prod c0 c1 -> "{" ++ showCom c0 ++ "} *\n {" ++ showCom c1 ++ "}"
-  Loop is c -> "LOOP " ++ show is ++ " {\n" ++ showCom c ++ "}"
+  Loop c -> "LOOP " ++ " {\n" ++ showCom c ++ "}"
 
 sexpr :: [String] -> String
 sexpr ss = "(" ++ unwords ss ++ ")"
@@ -465,14 +466,14 @@ example3 =
     , Assign s1 (ALit 0)
     , Assign i0 (ALit 0)
     , Assign i1 (ALit 0)
-    , Loop [i0] $
+    , Loop $
         mseq
           [ Assert (Lt (V i0) (V n))
           , Assign s0 (Add (V s0) (V i0))
           , Assign i0 (Add (V i0) (ALit 1))
           ]
     , Assert (Ge (V i0) (V n))
-    , Loop [i1] $
+    , Loop $
         mseq
           [ Assert (Lt (V i1) (V n))
           , Assign s1 (Add (V s1) (V i1))
