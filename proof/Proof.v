@@ -80,6 +80,35 @@ Inductive ceval : com -> state -> state -> Prop :=
 | ESkip : forall st, ceval cskip st st.
 Hint Constructors ceval.
 
+Inductive ceval_k : nat -> com -> state -> state -> Prop :=
+| KAssign : forall k st x e n,
+    aeval st e = n ->
+    ceval_k k (x ::= e) (singleton st) (singleton (stupdate x n st))
+| KAssume : forall k st (e : assertion),
+    e st -> ceval_k k (cassume e) st st
+| KSeq : forall k st st' st'' c0 c1,
+    ceval_k k c0 st st' ->
+    ceval_k k c1 st' st'' ->
+    ceval_k k (cseq c0 c1) st st''
+| KSumLeft : forall k st st' c0 c1,
+    ceval_k k c0 st st' ->
+    ceval_k k (csum c0 c1) st st'
+| KSumRight : forall k st st' c0 c1,
+    ceval_k k c1 st st' ->
+    ceval_k k (csum c0 c1) st st'
+| KProd : forall k st1 st1' st2 st2' c1 c2,
+    ceval_k k c1 st1 st1' ->
+    ceval_k k c2 st2 st2' ->
+    ceval_k k (cprod c1 c2) (st1 <*> st2) (st1' <*> st2')
+| KLoop : forall k st st' st'' c,
+    ceval_k k c st st' ->
+    ceval_k k (cloop c) st' st'' ->
+    ceval_k (S k) (cloop c) st st''
+| KBreak : forall k st c,
+    ceval_k k (cloop c) st st
+| KSkip : forall k st, ceval_k k cskip st st.
+Hint Constructors ceval_k.
+
 Definition supersedes (c0:com) (c1:com) : Prop :=
   forall st st', 
     ceval c0 st st' -> ceval c1 st st'.
@@ -167,6 +196,64 @@ Proof.
     * eauto.
 Qed.
 
+Lemma loop_prod_l_skip : forall c st st' st'',
+  ceval (LOOP { c }) st st' -> ceval (LOOP { c *** SKIP }) (st <*> st'') (st' <*> st'').
+Proof.
+  intros.
+  remember (LOOP { c }) as loop.
+  induction H; try (inversion Heqloop); subst; intuition; eauto.
+Qed.
+
+Lemma loop_prod_r_skip : forall c st st' st'',
+  ceval (LOOP { c }) st st' -> ceval (LOOP { SKIP *** c }) (st'' <*> st) (st'' <*> st').
+Proof.
+  intros.
+  remember (LOOP { c }) as loop.
+  induction H; try (inversion Heqloop); subst; intuition; eauto.
+Qed.
+
+Theorem iloop_prod2 : forall c0 c1,
+  LOOP { c0 } *** LOOP { c1 } ~>
+  LOOP { c0 *** c1 } ;; (LOOP { c0 *** SKIP } ;; LOOP { SKIP *** c1 }).
+Proof.
+  unfold supersedes; intros.
+  inversion H; subst; clear H.
+  remember (LOOP {c0}) as loop0.
+  remember (LOOP {c1}) as loop1.
+  induction H2, H5; try (inversion Heqloop0) ; try (inversion Heqloop1)
+                  ; clear Heqloop0 ; clear Heqloop1
+                  ; subst; intuition; try (clear IHceval1).
+  - inversion H; subst; clear H.
+    inversion H5; subst; clear H5.
+    econstructor.
+    econstructor.
+    econstructor; eauto.
+    eauto.
+    econstructor.
+    eapply loop_prod_l_skip. eauto.
+    eapply loop_prod_r_skip. eauto.
+  - inversion H; subst; clear H.
+    inversion H5; subst; clear H5.
+    econstructor.
+    eapply EBreak.
+    econstructor.
+    econstructor.
+    eauto.
+    eapply loop_prod_l_skip. eauto.
+    eapply loop_prod_r_skip. eauto.
+  - econstructor.
+    eapply EBreak.
+    econstructor.
+    eapply EBreak.
+    eapply loop_prod_r_skip. eauto.
+  - econstructor.
+    eapply EBreak.
+    econstructor.
+    eapply EBreak.
+    eapply EBreak.
+Qed.
+
+
 Definition left (P:assertion) st0 : assertion :=
   fun st1 => P (st0 <*> st1).
 
@@ -201,7 +288,11 @@ Definition associate (P:assertion) : assertion :=
 Definition triple (P:assertion) (c:com) (Q:assertion) : Prop :=
   forall st st', ceval c st st' -> P st -> Q st'.
 
+Definition triple_k (k : nat) (P:assertion) (c:com) (Q:assertion) : Prop :=
+  forall st st', ceval_k k c st st' -> P st -> Q st'.
+
 Notation "{{ P }} c {{ Q }}" := (triple P c Q) (at level 90, c at next level).
+Notation "k |- {{ P }} c {{ Q }}" := (triple_k k P c Q) (at level 90, c at next level).
 
 Definition hoare_comm : forall P Q c0 c1,
   {{commute P}} c1 *** c0 {{commute Q}} ->
@@ -312,3 +403,38 @@ Proof.
   remember (LOOP { c }) as loop.
   induction H0; try (inversion Heqloop); clear Heqloop; subst; intuition; eauto.
 Qed.
+
+Lemma k_reduce : forall st st' c j k,
+  j < k -> ceval_k j c st st' -> ceval_k k c st st'.
+Proof.
+  unfold triple_k; intros.
+  generalize dependent k.
+  induction H0; eauto; intros.
+  induction k0.
+  - inversion H.
+  - econstructor; firstorder.
+Qed.
+
+Theorem hoare_loop_k_test : forall k (P : assertion) c,
+  k |- {{P}} c ;; LOOP { c } {{P}} ->
+  S k |- {{P}} LOOP { c } {{P}}.
+Proof.
+  unfold triple_k; intros.
+  inversion H0; subst.
+  eapply H; eauto.
+  eauto.
+Qed.
+
+Theorem hoare_loop_k : forall k (P : assertion) c,
+  ((k |- {{P}} LOOP { c } {{P}}) -> (k |- {{P}} c ;; LOOP { c } {{P}})) ->
+  S k |- {{P}} LOOP { c } {{P}}.
+Proof.
+  unfold triple_k; intros.
+  generalize dependent st.
+  generalize dependent st'.
+  induction k; intros.
+  - admit.
+  - inversion H0; subst.
+    + inversion H5; subst.
+      * eapply H; intros.
+
