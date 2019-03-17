@@ -63,6 +63,7 @@ data Prop
   | F
   | Not Prop
   | And Prop Prop
+  | Or Prop Prop
   | Impl Prop Prop
   | Eql Expr Expr
   | Lt Expr Expr
@@ -77,12 +78,20 @@ pand F _ = F
 pand _ F = F
 pand p q = p `And` q
 
+por :: Prop -> Prop -> Prop
+por T _ = T
+por _ T = T
+por F p = p
+por p F = p
+por p q = p `Or` q
+
 psubst :: Var -> Expr -> Prop -> Prop
 psubst x e = \case
   T -> T
   F -> F
   Not p -> Not (go p)
   And p0 p1 -> And (go p0) (go p1)
+  Or p0 p1 -> Or (go p0) (go p1)
   Impl p0 p1 -> Impl (go p0) (go p1)
   Eql e0 e1 -> Eql (goe e0) (goe e1)
   Lt e0 e1 -> Lt (goe e0) (goe e1)
@@ -98,6 +107,7 @@ prename i = \case
   F -> F
   Not p -> Not (go p)
   And p0 p1 -> And (go p0) (go p1)
+  Or p0 p1 -> Or (go p0) (go p1)
   Impl p0 p1 -> Impl (go p0) (go p1)
   Eql e0 e1 -> Eql (goe e0) (goe e1)
   Lt e0 e1 -> Lt (goe e0) (goe e1)
@@ -112,6 +122,7 @@ plookup m = \case
   F -> F
   Not p -> Not (go p)
   And p0 p1 -> And (go p0) (go p1)
+  Or p0 p1 -> Or (go p0) (go p1)
   Impl p0 p1 -> Impl (go p0) (go p1)
   Eql e0 e1 -> Eql (goe e0) (goe e1)
   Lt e0 e1 -> Lt (goe e0) (goe e1)
@@ -126,6 +137,7 @@ pvocab = \case
   F -> S.empty
   Not p -> pvocab p
   And p0 p1 -> S.union (pvocab p0) (pvocab p1)
+  Or p0 p1 -> S.union (pvocab p0) (pvocab p1)
   Impl p0 p1 -> S.union (pvocab p0) (pvocab p1)
   Eql e0 e1 -> S.union (evocab e0) (evocab e1)
   Lt e0 e1 -> S.union (evocab e0) (evocab e1)
@@ -138,6 +150,7 @@ propRels = \case
   F -> S.empty
   Not p -> propRels p
   And p0 p1 -> propRels p0 `S.union` propRels p1
+  Or p0 p1 -> propRels p0 `S.union` propRels p1
   Impl p0 p1 -> propRels p0 `S.union` propRels p1
   Eql{} -> S.empty
   Lt{} -> S.empty
@@ -196,7 +209,8 @@ mergeLoops = \case
         c1' = mergeLoops c1
     in case (c0', c1') of
          (Loop c0, Loop c1) ->
-           Loop (c0 `Prod` c1) `Seq` (SLoop c0 `Prod` Skip) `Seq` (Skip `Prod` SLoop c1)
+           -- Loop (c0 `Prod` c1) `Seq` (SLoop c0 `Prod` Skip) `Seq` (Skip `Prod` SLoop c1)
+           Loop (c0 `Prod` c1)
          _ -> Prod c0' c1'
   c -> c
 
@@ -263,7 +277,9 @@ quantify p = Forall (S.toList (pvocab p)) p
 (/\) ps p = map (`pand` p) ps
 
 (==>) :: [Prop] -> Prop -> M ()
-(==>) ps q = mapM_ (\p ->tell [quantify (p `Impl` q)]) ps
+(==>) ps q =
+  let p = foldr por F ps
+    in tell [quantify (p `Impl` q)]
 
 equiv :: St -> St -> M Prop
 equiv (Composite st0 st1) (Composite st2 st3) = pand <$> equiv st0 st2 <*> equiv st1 st3
@@ -409,6 +425,7 @@ smt2Prop = \case
   F -> "false"
   Not p -> sexpr ["not", smt2Prop p]
   And p0 p1 -> sexpr ("and" : map smt2Prop (conjuncts p0 ++ conjuncts p1))
+  Or p0 p1 -> sexpr ("or" : map smt2Prop (disjuncts p0 ++ disjuncts p1))
   Impl p0 p1 -> sexpr ["=>", smt2Prop p0, smt2Prop p1]
   Eql e0 e1 -> sexpr ["=", smt2Expr e0, smt2Expr e1]
   Lt e0 e1 -> sexpr ["<", smt2Expr e0, smt2Expr e1]
@@ -418,6 +435,9 @@ smt2Prop = \case
     conjuncts :: Prop -> [Prop]
     conjuncts (And p0 p1) = conjuncts p0 ++ conjuncts p1
     conjuncts p = [p]
+    disjuncts :: Prop -> [Prop]
+    disjuncts (Or p0 p1) = disjuncts p0 ++ disjuncts p1
+    disjuncts p = [p]
 
 example :: Com
 example =
@@ -432,16 +452,16 @@ example3 =
   Assign "i0" (ALit 0) `Seq`
   Assign "s1" (ALit 0) `Seq`
   Assign "i1" (ALit 0) `Seq`
-  Loop (
-    ( Assert (Lt (V "i0") (V "n")) `Seq`
-      Assign "s0" (Add (V "s0") (V "i0")) `Seq`
-      Assign "i0" (Add (V "i0") (ALit 1))
-    )) `Seq`
+  Loop (Sum ( Assert (Lt (V "i0") (V "n")) `Seq`
+              Assign "s0" (Add (V "s0") (V "i0")) `Seq`
+              Assign "i0" (Add (V "i0") (ALit 1))
+            ) (Assert (Not (Lt (V "i0") (V "n"))))
+    ) `Seq`
   Assert (Not (Lt (V "i0") (V "n"))) `Seq`
-  Loop (
-    ( Assert (Lt (V "i1") (V "n")) `Seq`
-      Assign "s1" (Add (V "s1") (V "i1")) `Seq`
-      Assign "i1" (Add (V "i1") (ALit 1))
-    )) `Seq`
+  Loop (Sum ( Assert (Lt (V "i1") (V "n")) `Seq`
+              Assign "s1" (Add (V "s1") (V "i1")) `Seq`
+              Assign "i1" (Add (V "i1") (ALit 1))
+            ) (Assert (Not (Lt (V "i1") (V "n"))))
+    ) `Seq`
   Assert (Not (Lt (V "i1") (V "n"))) `Seq`
   Assert (Not (Eql (V "s0") (V "s1")))
