@@ -83,19 +83,19 @@ TODO
     \hoare{P}{c_0}{Q}
   }
   \qquad
+  \inference[\textsc{Prod}]{%
+    \hoare{P_0}{c_0}{Q_0}&
+    \hoare{P_1}{c_1}{Q_1}
+  }{%
+    \hoare{P_0 \times P_1}{c_0 \times c_1}{Q_0 \times Q_1}
+  }
+  \\
   \inference[\textsc{Seq}]{%
     \hoare{\ajoin(P)}{c_0}{R}&
     \hoare{R}{c_0 \times c_1}{S}&
     \hoare{S}{c_0}{\ajoin(Q)}
   }{%
     \hoare{P}{\cseq{c_0}{c_1}}{Q}
-  }
-  \\
-  \inference[\textsc{Prod}]{%
-    \forall \sigma_1.\hoare{\aright(P, \sigma_1)}{c_0}{\aright(R, \sigma_1)}\\
-    \forall \sigma_0.\hoare{\aleft(R, \sigma_0)}{c_1}{\aleft(Q, \sigma_0)}
-  }{%
-    \hoare{P}{c_0 \times c_1}{Q}
   }
   \\
   \inference[\textsc{Comm}]{%

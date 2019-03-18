@@ -226,8 +226,8 @@ quantify p = Forall (S.toList (pvocab p)) p
 (==>) :: Prop -> Prop -> M ()
 (==>) p q = tell [quantify (p `Impl` q)]
 
-equiv :: St -> St -> (St, Prop)
-equiv st0 st1 = let (st', p, q) = resolve st0 st1 in (st', p /\ q)
+equiv :: St -> St -> Prop
+equiv st0 st1 = let (_, p, q) = resolve st0 st1 in p /\ q
 
 resolve :: St -> St -> (St, Prop, Prop)
 resolve (Composite st0 st1) (Composite st0' st1') =
@@ -278,8 +278,7 @@ triple c p st
            (q, st') <- triple (Prod Skip c0) p (Composite st st)
            (r, st'') <- triple (Prod c0 c1) q st'
            (s, Composite st0 st1) <- triple (Prod c1 Skip) r st''
-           let (st2, eq) = equiv st0 st1
-           pure (s /\ eq, st2)
+           pure (s /\ equiv st0 st1, st0)
     Sum c0 c1 -> do
       (q0, st0) <- triple c0 p st
       (q1, st1) <- triple c1 p st
@@ -295,10 +294,10 @@ triple c p st
       if loopless c0 || loopless c1
       then do
         let Composite st0 st1 = st
-        st0Amb <- copy st0
-        st1Amb <- copy st1
-        (q0, st0') <- local (ambient %~ (st1Amb:)) (triple c0 p st0)
-        (q1, st1') <- local (ambient %~ (st0Amb:)) (triple c1 p st1)
+        st0Cop <- copy st0
+        st1Cop <- copy st1
+        (q0, st0') <- local (ambient %~ (st1:)) (triple c0 p st0)
+        (q1, st1') <- local (ambient %~ (st0:)) (triple c1 p st1)
         pure (q0 /\ q1, Composite st0' st1')
       else case c1 of
         Sum c1' c1'' -> triple (Sum (Prod c0 c1') (Prod c0 c1'')) p st
@@ -414,55 +413,56 @@ example =
   -- Assign "x" (Add (V "x") (ALit 1)) `Seq`
   Assert (Not (Eql (V "x") (ALit 1)))
 
-example3 :: Com
-example3 =
+loopCopy :: Com
+loopCopy =
   Assign "s0" (ALit 0) `Seq`
-  Assign "i0" (ALit 0) `Seq`
-  Loop (Sum ( Assert (Lt (V "i0") (V "n")) `Seq`
-              Assign "s0" (Add (V "s0") (V "i0")) `Seq`
-              Assign "i0" (Add (V "i0") (ALit 1))
-            ) (Assert (Not (Lt (V "i0") (V "n"))))
+  Assign "i" (ALit 0) `Seq`
+  Loop (Sum ( Assert (Lt (V "i") (V "n")) `Seq`
+              Assign "s0" (Add (V "s0") (V "i")) `Seq`
+              Assign "i" (Add (V "i") (ALit 1))
+            ) (Assert (Ge (V "i") (V "n")))
     ) `Seq`
-  Assert (Not (Lt (V "i0") (V "n"))) `Seq`
-  Assign "s1" (ALit 0) `Seq`
-  Assign "i1" (ALit 0) `Seq`
-  Loop (Sum ( Assert (Lt (V "i1") (V "n")) `Seq`
-              Assign "s1" (Add (V "s1") (V "i1")) `Seq`
-              Assign "i1" (Add (V "i1") (ALit 1))
-            ) (Assert (Not (Lt (V "i1") (V "n"))))
+  Assert (Ge (V "i") (V "n")) `Seq`
+  Assign "s1" (ALit (-1)) `Seq`
+  Assign "s1" (Add (V "s1") (ALit 1)) `Seq`
+  Loop (Sum ( Assert (Lt (V "i") (V "n")) `Seq`
+              Assign "s1" (Add (V "s1") (V "i")) `Seq`
+              Assign "i" (Add (V "i") (ALit 1))
+            ) (Assert (Ge (V "i") (V "n")))
     ) `Seq`
-  Assert (Not (Lt (V "i1") (V "n"))) `Seq`
+  Assert (Ge (V "i") (V "n")) `Seq`
   Assert (Not (Eql (V "s0") (V "s1")))
 
 loopFusion :: Com
 loopFusion =
   Assign "s0" (ALit 0) `Seq`
   Assign "s1" (ALit 0) `Seq`
+  Assign "i" (ALit 0) `Seq`
+  Loop (Sum ( Assert (Lt (V "i") (V "n")) `Seq`
+              Assign "s0" (Add (V "s0") (V "i")) `Seq`
+              Assign "s1" (Add (V "s1") (V "i")) `Seq`
+              Assign "i" (Add (V "i") (ALit 1))
+            ) (Assert (Ge (V "i") (V "n")))
+    ) `Seq`
+    Assert (Ge (V "i") (V "n")) `Seq`
+
+  Assign "i" (ALit 0) `Seq`
   Assign "s2" (ALit 0) `Seq`
+  Loop (Sum ( Assert (Lt (V "i") (V "n")) `Seq`
+              Assign "s2" (Add (V "s2") (V "i")) `Seq`
+              Assign "i" (Add (V "i") (ALit 1))
+            ) (Assert (Ge (V "i") (V "n")))
+    ) `Seq`
+    Assert (Ge (V "i") (V "n")) `Seq`
+
+  Assign "i" (ALit 0) `Seq`
   Assign "s3" (ALit 0) `Seq`
-  Assign "i0" (ALit 0) `Seq`
-  Assign "i1" (ALit 0) `Seq`
-  Assign "i2" (ALit 0) `Seq`
-  Loop (Sum ( Assert (Lt (V "i0") (V "n")) `Seq`
-              Assign "s0" (Add (V "s0") (V "i0")) `Seq`
-              Assign "s1" (Add (V "s1") (V "i0")) `Seq`
-              Assign "i0" (Add (V "i0") (ALit 1))
-            ) (Assert (Not (Lt (V "i0") (V "n"))))
+  Loop (Sum ( Assert (Lt (V "i") (V "n")) `Seq`
+              Assign "s3" (Add (V "s3") (V "i")) `Seq`
+              Assign "i" (Add (V "i") (ALit 1))
+            ) (Assert (Ge (V "i") (V "n")))
     ) `Seq`
-    Assert (Not (Lt (V "i0") (V "n"))) `Seq`
+    Assert (Ge (V "i") (V "n")) `Seq`
 
-  Loop (Sum ( Assert (Lt (V "i1") (V "n")) `Seq`
-              Assign "s2" (Add (V "s2") (V "i1")) `Seq`
-              Assign "i1" (Add (V "i1") (ALit 1))
-            ) (Assert (Not (Lt (V "i1") (V "n"))))
-    ) `Seq`
-    Assert (Not (Lt (V "i1") (V "n"))) `Seq`
-
-  Loop (Sum ( Assert (Lt (V "i2") (V "n")) `Seq`
-              Assign "s3" (Add (V "s3") (V "i2")) `Seq`
-              Assign "i2" (Add (V "i2") (ALit 1))
-            ) (Assert (Not (Lt (V "i2") (V "n"))))
-    ) `Seq`
-    Assert (Not (Lt (V "i2") (V "n"))) `Seq`
-
-  Assert (Not (And (Eql (V "s0") (V "s2")) (Eql (V "s1") (V "s3"))))
+  Assert (Not (Eql (V "s0") (V "s2"))) `Seq`
+  Assert (Not (Eql (V "s1") (V "s3")))
