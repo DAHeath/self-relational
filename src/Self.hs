@@ -170,15 +170,15 @@ type Vocab = [Var]
 
 data Env = Env
   { _vocab :: Vocab
-  , _ambient :: [St]
-  } deriving (Show, Read, Eq, Ord)
+  , _ambient :: St -> St
+  }
 
 initialEnv :: Com -> Env
 initialEnv c =
   let v = S.toList $ cvocab c
   in Env
      { _vocab = v
-     , _ambient = []
+     , _ambient = id
      }
 
 data Ctxt = Ctxt
@@ -213,8 +213,8 @@ associate ac (Composite st0 (Composite st1 st2)) = do
 rel :: M (St -> Prop)
 rel = do
   c <- relCount <<+= 1
-  amb <- concatMap collapse <$> view ambient
-  pure (\st -> Rel c (collapse st ++ amb))
+  amb <- view ambient
+  pure (Rel c . collapse . amb)
   where
     collapse :: St -> [Expr]
     collapse (Composite st0 st1) = collapse st0 ++ collapse st1
@@ -249,10 +249,6 @@ resolve (Singleton m) (Singleton m') =
              else pure ()
         pure (max n m)
 
-copy :: St -> M St
-copy (Composite st0 st1) = Composite <$> copy st0 <*> copy st1
-copy (Singleton m) = Singleton <$> traverse (\_ -> varCount <<+= 1) m
-
 triple :: Com -> Prop -> St -> M (Prop, St)
 triple c p st
   | loopless c = do
@@ -275,7 +271,7 @@ triple c p st
                 (r, st'') <- triple c1 q st'
                 pure (r, st'')
          | otherwise -> do
-           (q, st') <- triple (Prod Skip c0) p (Composite st st)
+           (q, st') <- triple (Prod Skip c0) (p) (Composite st st)
            (r, st'') <- triple (Prod c0 c1) q st'
            (s, Composite st0 st1) <- triple (Prod c1 Skip) r st''
            pure (s /\ equiv st0 st1, st0)
@@ -294,10 +290,8 @@ triple c p st
       if loopless c0 || loopless c1
       then do
         let Composite st0 st1 = st
-        st0Cop <- copy st0
-        st1Cop <- copy st1
-        (q0, st0') <- local (ambient %~ (st1:)) (triple c0 p st0)
-        (q1, st1') <- local (ambient %~ (st0:)) (triple c1 p st1)
+        (q0, st0') <- local (ambient %~ (. (`Composite` st1))) (triple c0 p st0)
+        (q1, st1') <- local (ambient %~ (. (st0 `Composite`))) (triple c1 p st1)
         pure (q0 /\ q1, Composite st0' st1')
       else case c1 of
         Sum c1' c1'' -> triple (Sum (Prod c0 c1') (Prod c0 c1'')) p st
@@ -425,6 +419,7 @@ loopCopy =
   Assert (Ge (V "i") (V "n")) `Seq`
   Assign "s1" (ALit (-1)) `Seq`
   Assign "s1" (Add (V "s1") (ALit 1)) `Seq`
+  Assign "i" (ALit 0) `Seq`
   Loop (Sum ( Assert (Lt (V "i") (V "n")) `Seq`
               Assign "s1" (Add (V "s1") (V "i")) `Seq`
               Assign "i" (Add (V "i") (ALit 1))
@@ -464,5 +459,4 @@ loopFusion =
     ) `Seq`
     Assert (Ge (V "i") (V "n")) `Seq`
 
-  Assert (Not (Eql (V "s0") (V "s2"))) `Seq`
-  Assert (Not (Eql (V "s1") (V "s3")))
+  Assert (Not (And (Eql (V "s0") (V "s2")) (Eql (V "s1") (V "s3"))))
