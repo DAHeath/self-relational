@@ -237,7 +237,7 @@ triple c p st
                 (r, st'') <- triple c1 q st'
                 pure (r, st'')
          | looplessEnd c1 ->
-          -- If there is a looplesend start, we can attempt to chop the end off now.
+          -- If there is a loopless end, we can attempt to chop the end off now.
             case c1 of
               -- If the second command is a sequence, then reassociate to move
               -- towards the end of the sequence.
@@ -267,7 +267,7 @@ triple c p st
       -- needed to achieve this resolution.
       let (st', r0, r1) = resolve st0 st1
       pure ((q0 /\ r0) \/ (q1 /\ r1), st')
-    -- To handle loops, we just apply the loop rules (by constructing a fresh
+    -- To handle loops, we apply the loop rule (by constructing a fresh
     -- relational predicate to represent the loop invariant).
     Loop c -> do
       r <- rel
