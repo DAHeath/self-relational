@@ -100,12 +100,87 @@ is a map from a variables to integer values:
 \[\state ::= \var \rightarrow \mathbb{Z}\]
 
 \subsection{Hoare Logic}
+\begin{figure}
+\begin{spreadlines}{5pt}
+\begin{gather*}
+  \inference[\textsc{Skip}]{%
+  }{%
+    \hoare{P}{\cskip}{P}
+  }
+  \qquad
+  \inference[\textsc{Assign}]{%
+  }{%
+    \hoare{\subst{x}{a}{P}}{\cassign{x}{a}}{P}
+  }
+  \qquad
+  \inference[\textsc{Assert}]{%
+  }{%
+    \hoare{P}{\cassert{b}}{P \land b}
+  }
+  \\
+  \inference[\textsc{Seq}]{%
+    \hoare{P}{c_0}{R}&
+    \hoare{R}{c_1}{Q}
+  }{%
+    \hoare{P}{\cseq{c_0}{c_1}}{Q}
+  }
+  \qquad
+  \inference[\textsc{Sum}]{%
+    \hoare{P}{c_0}{Q}&
+    \hoare{P}{c_1}{Q}
+  }{%
+    \hoare{P}{\csum{c_0}{c_1}}{Q}
+  }
+  \\
+  \inference[\textsc{Loop}]{%
+    \hoare{P}{c}{P}
+  }{%
+    \hoare{P}{\cloop{c}}{P}
+  }
+  \qquad
+  \inference[\textsc{Cons}]{%
+    P \Rightarrow P'&
+    \hoare{P'}{c}{Q'}&
+    Q' \Rightarrow Q
+  }{%
+    \hoare{P}{c}{Q}
+  }
+  \end{gather*}
+\end{spreadlines}
+\caption{%
+  Hoare Logic judgements over $\lang$.
+  Metavariables $P, Q, R\ldots$ represent program
+  assertions. Other metavariables are consistent with
+  \cref{fig:semantics}
+}\label{fig:base-proof-system}
+\end{figure}
 
-TODO:
-\begin{itemize}
-  \item Space of assertions
-  \item Definition of Hoare triple
-  \item Traditional system?
-\end{itemize}
+Hoare Logic is a framework for reasoning about imperative commands by
+relating them to program \emph{assertions}.
+An assertion is a proposition over a program state. Formally, we
+define the space of assertions as functions from program states to
+propositions.
+\[ \textsf{Assert} ::= \state \rightarrow \textsf{Prop} \]
+Typically, a Hoare logic system provides a set of judgements over
+\emph{Hoare Triples}.
+If $P, Q \in \textsf{Assert}$ are assertions and $c \in \com$ is a
+command, then \hoare{P}{c}{Q} is a Hoare Triple.
+%
+Informally, this triple can be interpreted as stating \textbf{(1)} if
+the assertion $P$ holds over some program state $\sigma$ and
+\textbf{(2)} the command $c$ takes $\sigma$ to $\sigma'$, then
+\textbf{(3)} the assertion $Q$ must hold over $\sigma'$.
+%
+This definition can be formalized as follows:
+\[
+  \hoare{P}{c}{Q} ::= \forall \sigma,
+  \sigma'.~\ceval{c_0}{\sigma}{\sigma'} \Rightarrow P~\sigma \Rightarrow Q~\sigma'
+\]
+By establishing a set of sound rules, a Hoare logic system provides a
+composable framework for structuring program proofs.
+We provide a set of typical Hoare logic rules for $\lang$ in
+\Cref{fig:base-proof-system}.
+
+
 
 \end{document}

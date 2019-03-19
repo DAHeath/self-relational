@@ -32,50 +32,10 @@ product commands:
 That is, two parallel commands executed over two parallel states
 execute independently.
 
-TODO
-
 \subsection{A Self-Relational Proof System}
 \begin{figure}
 \begin{spreadlines}{5pt}
-\begin{subequations}
 \begin{gather*}
-  \inference[\textsc{Assign}]{%
-  }{%
-    \hoare{\subst{x}{a}{P}}{\cassign{x}{a}}{P}
-  }
-  \qquad
-  \inference[\textsc{Skip}]{%
-  }{%
-    \hoare{P}{\cskip}{P}
-  }
-  \qquad
-  \inference[\textsc{Cons}]{%
-    P \Rightarrow P'&
-    \hoare{P'}{c}{Q'}&
-    Q' \Rightarrow Q
-  }{%
-    \hoare{P}{c}{Q}
-  }
-  \\
-  \inference[\textsc{Sum}]{%
-    \hoare{P}{c_0}{Q}&
-    \hoare{P}{c_1}{Q}
-  }{%
-    \hoare{P}{\csum{c_0}{c_1}}{Q}
-  }
-  \qquad
-  \inference[\textsc{Assert}]{%
-  }{%
-    \hoare{P}{\cassert{b}}{P \land b}
-  }
-  \qquad
-  \inference[\textsc{Loop}]{%
-    \hoare{P}{c}{P}
-  }{%
-    \hoare{P}{\cloop{c}}{P}
-  }
-  \end{gather*}
-  \begin{empheq}[box=\fbox]{gather*}
   \inference[\textsc{Iso}]{%
     c_0 \cong c_1&
     \hoare{P}{c_1}{Q}
@@ -90,14 +50,6 @@ TODO
     \hoare{P_0 \times P_1}{c_0 \times c_1}{Q_0 \times Q_1}
   }
   \\
-  \inference[\textsc{Seq}]{%
-    \hoare{\ajoin(P)}{c_0}{R}&
-    \hoare{R}{c_0 \times c_1}{S}&
-    \hoare{S}{c_0}{\ajoin(Q)}
-  }{%
-    \hoare{P}{\cseq{c_0}{c_1}}{Q}
-  }
-  \\
   \inference[\textsc{Comm}]{%
     \hoare{\commute~P}{c_1 \times c_0}{\commute~Q}
   }{%
@@ -109,32 +61,79 @@ TODO
   }{%
     \hoare{P}{c_0 \times (c_1 \times c_2)}{Q}
   }
-  \end{empheq}
-  \begin{gather*}
-  \aleft(P, \sigma_0) := \lambda\sigma_1.~P(\sigma_0 \otimes \sigma_1)
-  \qquad
-  \aright(P, \sigma_1) := \lambda\sigma_0.~P(\sigma_0 \otimes \sigma_1)
   \\
-  \commute(P) := \lambda(\sigma_0 \otimes \sigma_1).~P(\sigma_1 \otimes \sigma_0)
+  \commute(P) ::= \lambda(\sigma_0 \otimes \sigma_1).~P(\sigma_1 \otimes \sigma_0)
   \qquad
-  \associate(P) :=%
+  \associate(P) ::=%
   \lambda((\sigma_0 \otimes \sigma_1) \otimes \sigma_2).~P(\sigma_0
-  \otimes (\sigma_1 \otimes \sigma_2))\\
-  \ajoin(P) := \lambda(\sigma_0 \otimes \sigma_1).~(\sigma_0 = \sigma_1) \land P(\sigma_0)
+  \otimes (\sigma_1 \otimes \sigma_2))
 \end{gather*}
-\end{subequations}
 \end{spreadlines}
-\caption{The self-relational proof system. Judgements are over
-Hoare Triples. Key rules that deviate from more traditional Hoare
-Logic systems are boxed.
-$\textsf{commute}$, $\textsf{associate}$, and
-$\Join$ are helper definitions for the proof rules.
-Metavariables $P, Q, R\ldots$ represent program
-assertions. Other metavariables are consistent with
-\cref{fig:semantics}}\label{fig:proof-system}
+\caption{%
+  Hoare Logic rules that extend the base proof system in
+  \cref{fig:base-proof-system} in order to allow reasoning about
+  products of commands.
+  %
+  $\textsf{commute}$ and $\textsf{associate}$.
+  %
+  All metavariables are consistent with \cref{fig:base-proof-system}
+}\label{fig:proof-rules}
 \end{figure}
 
-\subsection{Command Isomorphisms}
+Now that we have extended $\lang$ with products that have sensible
+semantics, we can extend the proof system of
+\cref{fig:base-proof-system}.
+Specifically, we would like to add rules that incorporate products.
+
+Recall that our goal is to allow the prover to consider two parts of
+the same program simultaneously. Syntactically, this goal can be
+restated as wanting to replace a sequence of commands $\cseq{c_0}{c_1}$
+by a product of commands $\cprod{c_0}{c_1}$ in the proof.
+The following proof rule captures this goal and is our key technical
+contribution:
+
+\begin{empheq}[box=\fbox]{gather*}
+  \inference[\textsc{Seq-Prod}]{%
+    \hoare{\ajoin(P)}{\cskip \times c_0}{R}&
+    \hoare{R}{c_0 \times c_1}{S}&
+    \hoare{S}{c_1 \times \cskip}{\ajoin(Q)}
+  }{%
+    \hoare{P}{\cseq{c_0}{c_1}}{Q}
+  }
+  \\
+  \ajoin(P) ::= \lambda(\sigma_0 \otimes \sigma_1).~(\sigma_0 = \sigma_1) \land P(\sigma_0)
+\end{empheq}
+An informal reading of this rule follows.
+Suppose that we want to reason about $\hoare{P}{\cseq{c_0}{c_1}}{Q}$ by
+considering $c_0$ and $c_1$ together. First, we must establish a
+``mutual'' pre-condition $R$. This pre-condition relates the state
+before executing $c_0$ to the state after executing $c_0$ (but before
+executing $c_1$).
+We must demonstrate that starting from $P$ and
+executing $c_0$ leads to this mutual pre-condition
+    (first premise).
+Symmetrically, we must establish a mutual post-condition $S$. $S$
+relates the state after executing $c_0$ (but before executing $c_1$)
+to the state after executing both commands.
+We must demonstrate that starting from this mutual post-condition and
+executing $c_1$ leads to the post-condition $Q$ (third premise).
+Finally, we have achieved our goal: After showing the first and third
+premise, it suffices to show that the product $\cprod{c_0}{c_1}$ with
+pre-condition $R$ leads to post-condition $S$ (second premise).
+
+\textsc{Seq-Prod} is the key rule for giving our proof system
+expressive power, but it is not sufficient to stop here.
+\Cref{fig:proof-rules} provides additional rules needed to dispatch
+relational proofs.
+%
+\textsc{Iso} is a helpful rule that allows the prover to rewrite the
+target command to some other, isomorphic command. We will discuss
+some useful isomorphisms in \cref{sec:iso}.
+%
+\textsc{Comm} and \textsc{Assoc} relate to dealing with multiple
+nested products.
+
+\subsection{Command Isomorphisms}\label{sec:iso}
 
 \begin{figure}
 \begin{spreadlines}{5pt}
