@@ -9,14 +9,14 @@
 (declare-fun R5 (Int Int Int Int Int Int Int Int) Bool)
 (declare-fun R6 (Int Int Int Int Int Int Int Int) Bool)
 (declare-fun R7 (Int Int Int Int Int Int Int Int) Bool)
-(declare-fun R8 (Int Int Int Int Int Int Int Int Int Int Int Int) Bool)
-(declare-fun R9 (Int Int Int Int Int Int Int Int Int Int Int Int) Bool)
+(declare-fun R8 (Int Int Int Int Int Int Int Int) Bool)
+(declare-fun R9 (Int Int Int Int Int Int Int Int) Bool)
 
 (assert (forall ((n_0 Int))
    (R0 0 n_0 0 0)))
 
 (assert (forall ((i_2 Int) (i_3 Int) (n_2 Int) (n_3 Int) (s0_2 Int) (s0_3 Int) (s1_2 Int) (s1_3 Int))
-   (=> (and (R0 i_3 n_3 s0_3 s1_3) (R0 i_2 n_2 s0_2 s1_2)) (R3 i_3 n_3 s0_3 s1_3 i_2 n_2 s0_2 s1_2))))
+   (=> (and (R0 i_3 n_3 s0_3 s1_3) (= i_3 i_2) (= n_3 n_2) (= s0_3 s0_2) (= s1_3 s1_2)) (R3 i_3 n_3 s0_3 s1_3 i_2 n_2 s0_2 s1_2))))
 
 (assert (forall ((i_1 Int) (i_4 Int) (n_1 Int) (n_4 Int) (s0_1 Int) (s0_4 Int) (s1_1 Int) (s1_4 Int))
    (=> (R3 i_1 n_1 s0_1 s1_1 i_4 n_4 s0_4 s1_4) (R1 i_1 n_1 s0_1 s1_1 i_4 n_4 s0_4 s1_4))))
@@ -49,19 +49,19 @@
    (=> (and (R5 i_17 n_17 s0_17 s1_17 i_18 n_18 s0_18 s1_18) (>= i_18 n_18) (not (= s0_18 s1_18))) (R2 i_17 n_17 s0_17 s1_17 i_18 n_18 s0_18 s1_18))))
 
 (assert (forall ((i_20 Int) (i_21 Int) (n_20 Int) (n_21 Int) (s0_20 Int) (s0_21 Int) (s1_20 Int) (s1_21 Int))
-   (=> (and (R2 i_21 n_21 s0_21 s1_21 i_20 n_20 s0_20 s1_20) (>= i_21 n_21)) (R8 1 n_21 s0_21 s1_21 i_20 n_20 s0_20 s1_20 i_20 n_20 s0_20 s1_20))))
+   (=> (and (R2 i_21 n_21 s0_21 s1_21 i_20 n_20 s0_20 s1_20) (>= i_21 n_21)) (R8 1 n_21 s0_21 s1_21 i_20 n_20 s0_20 s1_20))))
 
 (assert (forall ((i_20 Int) (i_22 Int) (n_20 Int) (n_22 Int) (s0_20 Int) (s0_22 Int) (s1_20 Int) (s1_22 Int))
-   (=> (R8 i_22 n_22 s0_22 s1_22 i_20 n_20 s0_20 s1_20 i_20 n_20 s0_20 s1_20) (R9 i_22 n_22 s0_22 s1_22 i_20 n_20 s0_20 s1_20 i_20 n_20 s0_20 s1_20))))
+   (=> (R8 i_22 n_22 s0_22 s1_22 i_20 n_20 s0_20 s1_20) (R9 i_22 n_22 s0_22 s1_22 i_20 n_20 s0_20 s1_20))))
 
 (assert (forall ((i_20 Int) (i_23 Int) (n_20 Int) (n_23 Int) (s0_20 Int) (s0_23 Int) (s1_20 Int) (s1_23 Int))
-   (=> (and (R9 i_23 n_23 s0_23 s1_23 i_20 n_20 s0_20 s1_20 i_20 n_20 s0_20 s1_20) (< i_23 n_23)) (R9 (+ i_23 1) n_23 s0_23 (+ s1_23 i_23) i_20 n_20 s0_20 s1_20 i_20 n_20 s0_20 s1_20))))
+   (=> (and (R9 i_23 n_23 s0_23 s1_23 i_20 n_20 s0_20 s1_20) (< i_23 n_23)) (R9 (+ i_23 1) n_23 s0_23 (+ s1_23 i_23) i_20 n_20 s0_20 s1_20))))
 
 (assert (forall ((i_20 Int) (i_24 Int) (n_20 Int) (n_24 Int) (s0_20 Int) (s0_24 Int) (s1_20 Int) (s1_24 Int))
-   (=> (and (R9 i_24 n_24 s0_24 s1_24 i_20 n_20 s0_20 s1_20 i_20 n_20 s0_20 s1_20) (>= i_24 n_24)) (R9 i_24 n_24 s0_24 s1_24 i_20 n_20 s0_20 s1_20 i_20 n_20 s0_20 s1_20))))
+   (=> (and (R9 i_24 n_24 s0_24 s1_24 i_20 n_20 s0_20 s1_20) (>= i_24 n_24)) (R9 i_24 n_24 s0_24 s1_24 i_20 n_20 s0_20 s1_20))))
 
 (assert (forall ((i_20 Int) (i_25 Int) (n_20 Int) (n_25 Int) (s0_20 Int) (s0_25 Int) (s1_20 Int) (s1_25 Int))
-   (=> (and (R9 i_25 n_25 s0_25 s1_25 i_20 n_20 s0_20 s1_20 i_20 n_20 s0_20 s1_20) (>= i_25 n_25) (not (= s0_25 s1_25))) (R7 i_25 n_25 s0_25 s1_25 i_20 n_20 s0_20 s1_20))))
+   (=> (and (R9 i_25 n_25 s0_25 s1_25 i_20 n_20 s0_20 s1_20) (>= i_25 n_25) (not (= s0_25 s1_25))) (R7 i_25 n_25 s0_25 s1_25 i_20 n_20 s0_20 s1_20))))
 
 (assert (forall ((i_19 Int) (i_26 Int) (n_19 Int) (n_26 Int) (s0_19 Int) (s0_26 Int) (s1_19 Int) (s1_26 Int))
    (=> (R7 i_19 n_19 s0_19 s1_19 i_26 n_26 s0_26 s1_26) false)))

@@ -252,6 +252,11 @@ type Assertion = St -> Prop
   Composite st0 st1 -> p st0 /\ q st1
   s -> error (show s)
 
+joined :: Assertion -> Assertion
+joined p = \case
+  Composite st0 st1 -> p st0 /\ equiv st0 st1
+  s -> error (show s)
+
 triple :: Assertion -> Com -> Assertion -> M ()
 triple p c q
   | hasSummary c = do
@@ -270,9 +275,9 @@ triple p c q
         else double $ do
           r <- rel
           s <- rel
-          triple (p *** p) (Prod Skip c0) r
+          triple (joined p) (Prod Skip c0) r
           triple r (Prod c0 c1) s
-          triple s (Prod c1 Skip) (q *** q)
+          triple s (Prod c1 Skip) (joined q)
       Sum c0 c1 -> do
         triple p c0 q
         triple p c1 q
@@ -368,8 +373,7 @@ hoare c =
 rel :: M (St -> Prop)
 rel = do
   c <- state (\ctx -> (relCount ctx, ctx { relCount = relCount ctx + 1 }))
-  fSt <- asks quantification
-  pure (Rel c . collapse . fSt)
+  pure (Rel c . collapse)
   where
     collapse :: St -> [Expr]
     collapse (Composite st0 st1) = collapse st0 ++ collapse st1
