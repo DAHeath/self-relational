@@ -59,19 +59,21 @@ data Prop
 (\/) p F = p
 (\/) p q = p `Or` q
 
-esubst :: Map Var Expr -> Expr -> Expr
-esubst m = \case
-  ALit i -> ALit i
-  V v -> M.findWithDefault (V v) v m
-  Add a0 a1 -> Add (esubst m a0) (esubst m a1)
+esubst :: Int -> Map Var Expr -> Expr -> Expr
+esubst i m = \case
+  ALit n -> ALit n
+  V v ->
+    let v' = v ++ "_" ++ show i
+    in M.findWithDefault (V v') v m
+  Add a0 a1 -> Add (esubst i m a0) (esubst i m a1)
 
 esimp :: Expr -> Expr
 esimp (Add (ALit i) (ALit j)) = ALit (i + j)
 esimp (Add e0 e1) = Add (esimp e0) (esimp e1)
 esimp e = e
 
-psubst :: Map Var Expr -> Prop -> Prop
-psubst m = \case
+psubst :: Int -> Map Var Expr -> Prop -> Prop
+psubst i m = \case
   T -> T
   F -> F
   Not p -> Not (go p)
@@ -82,8 +84,8 @@ psubst m = \case
   Lt e0 e1 -> Lt (goe e0) (goe e1)
   Ge e0 e1 -> Ge (goe e0) (goe e1)
   where
-    go = psubst m
-    goe = esubst m
+    go = psubst i m
+    goe = esubst i m
 
 psimp :: Prop -> Prop
 psimp p =
@@ -192,7 +194,7 @@ looplessEnd = \case
 -- | The space of program states. A state is either a map from variables to the
 -- counter used as a temporary over that variable, or it is a product of two
 -- states.
-data St = Singleton (Map Var Expr) | Composite St St
+data St = Singleton Int (Map Var Expr) | Composite St St
   deriving (Show, Read, Eq, Ord)
 
 -- | The context used to construct fresh variables. We include a counter for
@@ -216,9 +218,11 @@ data QProp = Forall [Var] Prop
 -- the correct vocabulary.
 type M a = ReaderT (St -> St) (StateT Ctxt (Writer [QProp])) a
 
-fresh :: St -> St
-fresh (Composite st0 st1) = Composite (fresh st0) (fresh st1)
-fresh (Singleton m) = Singleton (M.mapWithKey (\k _ -> V k) m)
+fresh :: St -> M St
+fresh (Composite st0 st1) = Composite <$> fresh st0 <*> fresh st1
+fresh (Singleton _ m) = do
+  c <- state (\ctx -> (varCount ctx, ctx { varCount = varCount ctx + 1 }))
+  pure (Singleton c (M.mapWithKey (\k _ -> V (k ++ "_" ++ show c)) m))
 
 -- | The core operation of this library. Given a command, a precondition, and a
 -- program state (that the precondition is over) the operation computes a
@@ -231,15 +235,15 @@ triple c p st = case c of
   -- Assign generates a fresh variable and sets this fresh variable equal to
   -- the expression.
   Assign x a -> do
-    let Singleton m = st
-    let a' = esubst m a
+    let Singleton i m = st
+    let a' = esubst i m a
     let m' = M.insert x a' m
-    pure (p, Singleton m')
+    pure (p, Singleton i m')
   -- The effect of an assertion is summarized by the asserted proposition
   -- itself (over the correct vocabulary).
   Assert e -> do
-    let Singleton m = st
-    pure (p /\ psubst m e, st)
+    let Singleton i m = st
+    pure (p /\ psubst i m e, st)
   -- If the command is a sequence, there are still possibilities for
   -- optimizations despite there being at least one loop.
   Seq c0 c1 ->
@@ -274,10 +278,11 @@ triple c p st = case c of
          -- then we are in the general case: Both commands in the sequence
          -- must be considered simultaneously. Apply the seq/prod rule to
          -- reason about both parts of the sequence together.
-         (q, st') <- triple (Prod Skip c0) (p) (Composite st st)
+         st1 <- fresh st
+         (q, st') <- triple (Prod Skip c0) (p /\ equiv st st1) (Composite st st1)
          (r, st'') <- triple (Prod c0 c1) q st'
-         (s, Composite st0 st1) <- triple (Prod c1 Skip) r st''
-         pure (s /\ equiv st0 st1, st0)
+         (s, Composite st0' st1') <- triple (Prod c1 Skip) r st''
+         pure (s /\ equiv st0' st1', st0')
   -- If the command is a sum, we must reason over the two summands separately.
   Sum c0 c1 -> do
     (q0, st0) <- triple c0 p st
@@ -285,14 +290,14 @@ triple c p st = case c of
     r <- rel
     q0 ==> r st0
     q1 ==> r st1
-    let st' = fresh st0
+    st' <- fresh st0
     pure (r st', st')
   -- To handle loops, we apply the loop rule (by constructing a fresh
   -- relational predicate to represent the loop invariant).
   Loop c -> do
     r <- rel
     p ==> r st
-    let st0 = fresh st
+    st0 <- fresh st
     (q, st') <- triple c (r st0) st0
     -- Each loop introduces two new constraints (by applying the consequence
     -- rule). One states that the precondition implies the loop invariant
@@ -343,10 +348,10 @@ rewrite c0 c1 = Prod c0 c1
 hoare :: Com -> [QProp]
 hoare c =
   let voc = S.toList $ cvocab c
-      initialState = Singleton (M.fromList (zip voc (map V voc)))
+      initialState = Singleton 0 (M.fromList (zip voc (map (\v -> V (v ++ "_0")) voc)))
       ctx = Ctxt
         { relCount = 0
-        , varCount = length voc
+        , varCount = 1
         , iState = initialState
         }
    in execWriter $ evalStateT (runReaderT
@@ -362,7 +367,7 @@ rel = do
   where
     collapse :: St -> [Expr]
     collapse (Composite st0 st1) = collapse st0 ++ collapse st1
-    collapse (Singleton m) = M.elems (M.mapWithKey (\v n -> n) m)
+    collapse (Singleton _ m) = M.elems m
 
 quantify :: Prop -> QProp
 quantify p = Forall (S.toList (pvocab p)) p
@@ -372,7 +377,7 @@ quantify p = Forall (S.toList (pvocab p)) p
 
 equiv :: St -> St -> Prop
 equiv (Composite st0 st1) (Composite st0' st1') = equiv st0 st0' /\ equiv st1 st1'
-equiv (Singleton m0) (Singleton m1) =
+equiv (Singleton _ m0) (Singleton _ m1) =
   let vs = S.fromList (M.keys m0) `S.union` S.fromList (M.keys m1)
       fetch v = M.findWithDefault (V v) v
    in foldr (/\) T (map (\v -> fetch v m0 `Eql` fetch v m1) (S.toList vs))
@@ -448,6 +453,7 @@ example =
 loopCopy :: Com
 loopCopy =
   Assign "s0" (ALit 0) `Seq`
+  Assign "s1" (ALit 0) `Seq`
   Assign "i" (ALit 0) `Seq`
   Loop (Sum ( Assert (Lt (V "i") (V "n")) `Seq`
               Assign "s0" (Add (V "s0") (V "i")) `Seq`
@@ -455,8 +461,7 @@ loopCopy =
             ) (Assert (Ge (V "i") (V "n")))
     ) `Seq`
   Assert (Ge (V "i") (V "n")) `Seq`
-  Assign "s1" (ALit 0) `Seq`
-  Assign "i" (ALit 5) `Seq`
+  Assign "i" (ALit 0) `Seq`
   Loop (Sum ( Assert (Lt (V "i") (V "n")) `Seq`
               Assign "s1" (Add (V "s1") (V "i")) `Seq`
               Assign "i" (Add (V "i") (ALit 1))
