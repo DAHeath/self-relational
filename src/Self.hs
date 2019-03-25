@@ -197,7 +197,7 @@ data St = Singleton (Map Var Expr) | Composite St St
 -- fresh logical relations and a counter for fresh variables.
 data Ctxt = Ctxt
   { relCount :: Int
-  , varCount :: Int
+  , stCount :: Int
   , vocab :: [Var]
   } deriving (Show, Read, Eq, Ord)
 
@@ -240,7 +240,7 @@ fresh = do
   where
     go (Multi s0 s1) = Composite <$> go s0 <*> go s1
     go Single = do
-      i <- state (\c -> (varCount c, c { varCount = varCount c + 1 }))
+      i <- state (\c -> (stCount c, c { stCount = stCount c + 1 }))
       voc <- lift $ gets vocab
       let m = M.fromList (zip voc (map (\v -> V (v ++ "_" ++ show i)) voc))
       pure (Singleton m)
@@ -268,7 +268,6 @@ triple p c q
           triple p c0 r
           triple r c1 q
         else double $ do
-          st <- fresh
           r <- rel
           s <- rel
           triple (p *** p) (Prod Skip c0) r
@@ -360,7 +359,7 @@ hoare c =
   let voc = S.toList $ cvocab c
       ctx = Ctxt
         { relCount = 0
-        , varCount = 1
+        , stCount = 0
         , vocab = voc
         }
    in execWriter $ evalStateT (runReaderT
