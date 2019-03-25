@@ -59,22 +59,19 @@ data Prop
 (\/) p F = p
 (\/) p q = p `Or` q
 
--- | In order to support the proof rules, we will rename variables to fresh
--- temporary variables. To do so, we use a map from variable names to a counter
--- that indicates which temporary to use.
-vrename :: Map Var Int -> Var -> Var
-vrename m v = (v ++ "_" ++ show (M.findWithDefault 0 v m))
-
--- | Renaming for expressions. See `vrename`.
-erename :: Map Var Int -> Expr -> Expr
-erename m = \case
+esubst :: Map Var Expr -> Expr -> Expr
+esubst m = \case
   ALit i -> ALit i
-  V v -> V (vrename m v)
-  Add a0 a1 -> Add (erename m a0) (erename m a1)
+  V v -> M.findWithDefault (V v) v m
+  Add a0 a1 -> Add (esubst m a0) (esubst m a1)
 
--- | Renaming for propositions. See `vrename`.
-prename :: Map Var Int -> Prop -> Prop
-prename m = \case
+esimp :: Expr -> Expr
+esimp (Add (ALit i) (ALit j)) = ALit (i + j)
+esimp (Add e0 e1) = Add (esimp e0) (esimp e1)
+esimp e = e
+
+psubst :: Map Var Expr -> Prop -> Prop
+psubst m = \case
   T -> T
   F -> F
   Not p -> Not (go p)
@@ -85,8 +82,31 @@ prename m = \case
   Lt e0 e1 -> Lt (goe e0) (goe e1)
   Ge e0 e1 -> Ge (goe e0) (goe e1)
   where
-    go = prename m
-    goe = erename m
+    go = psubst m
+    goe = esubst m
+
+psimp :: Prop -> Prop
+psimp p =
+  let q = go p
+   in if p == q then q
+                else psimp q
+  where
+    go T = T
+    go F = F
+    go (Not (Not p)) = p
+    go (Not p) = Not (go p)
+    go (And p q) = (/\) (go p) (go q)
+    go (Or p q) = (\/) (go p) (go q)
+    go (Impl T p) = p
+    go (Impl p q) = Impl (go p) (go q)
+    go (Eql e0 e1) =
+      let e0' = esimp e0
+          e1' = esimp e1
+      in if e0' == e1' then T
+                       else Eql e0' e1'
+    go (Lt e0 e1) = Lt (esimp e0) (esimp e1)
+    go (Ge e0 e1) = Ge (esimp e0) (esimp e1)
+    go (Rel i es) = Rel i (map esimp es)
 
 -- | The vocabulary of an expression.
 evocab :: Expr -> Set Var
@@ -172,7 +192,7 @@ looplessEnd = \case
 -- | The space of program states. A state is either a map from variables to the
 -- counter used as a temporary over that variable, or it is a product of two
 -- states.
-data St = Singleton (Map Var Int) | Composite St St
+data St = Singleton (Map Var Expr) | Composite St St
   deriving (Show, Read, Eq, Ord)
 
 -- | The context used to construct fresh variables. We include a counter for
@@ -180,6 +200,7 @@ data St = Singleton (Map Var Int) | Composite St St
 data Ctxt = Ctxt
   { relCount :: Int
   , varCount :: Int
+  , iState :: St
   } deriving (Show, Read, Eq, Ord)
 
 -- | A proposition quantified over a vocabulary.
@@ -195,103 +216,107 @@ data QProp = Forall [Var] Prop
 -- the correct vocabulary.
 type M a = ReaderT (St -> St) (StateT Ctxt (Writer [QProp])) a
 
-copy :: St -> M St
-copy (Composite st0 st1) = Composite <$> copy st0 <*> copy st1
-copy (Singleton m) = Singleton <$> traverse fresh m
-  where
-    fresh _ =
-      state (\ctx -> (varCount ctx, ctx { varCount = varCount ctx + 1 }))
+fresh :: St -> St
+fresh (Composite st0 st1) = Composite (fresh st0) (fresh st1)
+fresh (Singleton m) = Singleton (M.mapWithKey (\k _ -> V k) m)
 
 -- | The core operation of this library. Given a command, a precondition, and a
 -- program state (that the precondition is over) the operation computes a
 -- postcondition and a new program state (that the postcondition is over).
 -- It does this by applying the proof rules for self-relational Hoare logic.
 triple :: Com -> Prop -> St -> M (Prop, St)
-triple c p st
-  -- As an optimization, if the command has no loops then it can be completely
-  -- summarized by a single proposition without the need for relational
-  -- predicates.
-  | loopless c = do
-    (q, st') <- summary c st
-    pure (p /\ q, st')
-  -- First, eagerly try to merge loops together using the loop/product isomorphism.
-  | otherwise = case c of
-    -- If the command is a sequence, there are still possibilities for
-    -- optimizations despite there being at least one loop.
-    Seq c0 c1 ->
-      if | looplessStart c0 ->
-          -- If there is a loopless start, we can attempt to chop the start off now.
-            case c0 of
-              -- If the first command is a sequence, then reassociate to move
-              -- towards the beginning of the sequence.
-              Seq c0' c0'' -> triple (Seq c0' (Seq c0'' c1)) p st
-              -- Otherwise, dispatch that first command now (since we know it is not a loop).
-              c -> do
-                (q, st') <- triple c0 p st
-                (r, st'') <- triple c1 q st'
-                pure (r, st'')
-         | looplessEnd c1 ->
-          -- If there is a loopless end, we can attempt to chop the end off now.
-            case c1 of
-              -- If the second command is a sequence, then reassociate to move
-              -- towards the end of the sequence.
-              Seq c1' c1'' -> triple (Seq (Seq c0 c1') c1'') p st
-              -- Otherwise, dispatch that second command now (since we know it is not a loop).
-              c -> do
-                (q, st') <- triple c0 p st
-                (r, st'') <- triple c1 q st'
-                pure (r, st'')
-         | otherwise -> do
-           -- If (1) the sequence contains a loop, (2) the beginning of the
-           -- sequence is a loop, and (3) the end of the sequence is a loop
-           -- then we are in the general case: Both commands in the sequence
-           -- must be considered simultaneously. Apply the seq/prod rule to
-           -- reason about both parts of the sequence together.
-           (q, st') <- triple (Prod Skip c0) (p) (Composite st st)
-           (r, st'') <- triple (Prod c0 c1) q st'
-           (s, Composite st0 st1) <- triple (Prod c1 Skip) r st''
-           pure (s /\ equiv st0 st1, st0)
-    -- If the command is a sum, we must reason over the two summands separately.
-    Sum c0 c1 -> do
-      (q0, st0) <- triple c0 p st
-      (q1, st1) <- triple c1 p st
-      -- Note that each summand will generate a different output state. We must
-      -- ensure that the output state of the overall command is consistent.
-      -- `resolve` does this while providing any propositions of equality
-      -- needed to achieve this resolution.
-      let (st', r0, r1) = resolve st0 st1
-      pure ((q0 /\ r0) \/ (q1 /\ r1), st')
-    -- To handle loops, we apply the loop rule (by constructing a fresh
-    -- relational predicate to represent the loop invariant).
-    Loop c -> do
-      r <- rel
-      (q, st') <- triple c (r st) st
-      -- Each loop introduces two new constraints (by applying the consequence
-      -- rule). One states that the precondition implies the loop invariant
-      -- (over the pre-state) and the second states that the body maintains the
-      -- loop invariant.
-      p ==> r st
-      q ==> r st'
-      -- The post-condition of the loop is the loop invariant.
-      pure (r st', st')
-    -- Several optimizations are possible in the case of products.
-    Prod c0 c1 ->
-      -- If either multiplicand has no loops, it is sufficient to reason about
-      -- them separately.
-      if loopless c0 || loopless c1
-      then do
-        let Composite st0 st1 = st
-        -- Note that we must add state to the environment: Propositions for
-        -- one command are allowed to refer to the vocabulary of its peer.
-        sta <- copy st0
-        stb <- copy st1
-        (q0, st0') <- local (. (`Composite` st1)) (triple c0 p st0)
-        (q1, st1') <- local (. (st0' `Composite`)) (triple c1 q0 st1)
-        pure (q1, Composite st0' st1')
-      -- If both multiplicands have loops, then we will apply isomorphisms to
-      -- group loops together.  Eventually the loop/product isomorphism will
-      -- merge loops.
-      else triple (rewrite c0 c1) p st
+triple c p st = case c of
+  -- Skip has no effect.
+  Skip -> pure (p, st)
+  -- Assign generates a fresh variable and sets this fresh variable equal to
+  -- the expression.
+  Assign x a -> do
+    let Singleton m = st
+    let a' = esubst m a
+    let m' = M.insert x a' m
+    pure (p, Singleton m')
+  -- The effect of an assertion is summarized by the asserted proposition
+  -- itself (over the correct vocabulary).
+  Assert e -> do
+    let Singleton m = st
+    pure (p /\ psubst m e, st)
+  -- If the command is a sequence, there are still possibilities for
+  -- optimizations despite there being at least one loop.
+  Seq c0 c1 ->
+    if | loopless c0 || loopless c1 -> do
+          (r, st') <- triple c0 p st
+          triple c1 r st'
+       | looplessStart c0 ->
+        -- If there is a loopless start, we can attempt to chop the start off now.
+          case c0 of
+            -- If the first command is a sequence, then reassociate to move
+            -- towards the beginning of the sequence.
+            Seq c0' c0'' -> triple (Seq c0' (Seq c0'' c1)) p st
+            -- Otherwise, dispatch that first command now (since we know it is not a loop).
+            c -> do
+              (q, st') <- triple c0 p st
+              (r, st'') <- triple c1 q st'
+              pure (r, st'')
+       | looplessEnd c1 ->
+        -- If there is a loopless end, we can attempt to chop the end off now.
+          case c1 of
+            -- If the second command is a sequence, then reassociate to move
+            -- towards the end of the sequence.
+            Seq c1' c1'' -> triple (Seq (Seq c0 c1') c1'') p st
+            -- Otherwise, dispatch that second command now (since we know it is not a loop).
+            c -> do
+              (q, st') <- triple c0 p st
+              (r, st'') <- triple c1 q st'
+              pure (r, st'')
+       | otherwise -> do
+         -- If (1) the sequence contains a loop, (2) the beginning of the
+         -- sequence is a loop, and (3) the end of the sequence is a loop
+         -- then we are in the general case: Both commands in the sequence
+         -- must be considered simultaneously. Apply the seq/prod rule to
+         -- reason about both parts of the sequence together.
+         (q, st') <- triple (Prod Skip c0) (p) (Composite st st)
+         (r, st'') <- triple (Prod c0 c1) q st'
+         (s, Composite st0 st1) <- triple (Prod c1 Skip) r st''
+         pure (s /\ equiv st0 st1, st0)
+  -- If the command is a sum, we must reason over the two summands separately.
+  Sum c0 c1 -> do
+    (q0, st0) <- triple c0 p st
+    (q1, st1) <- triple c1 p st
+    r <- rel
+    q0 ==> r st0
+    q1 ==> r st1
+    let st' = fresh st0
+    pure (r st', st')
+  -- To handle loops, we apply the loop rule (by constructing a fresh
+  -- relational predicate to represent the loop invariant).
+  Loop c -> do
+    r <- rel
+    p ==> r st
+    let st0 = fresh st
+    (q, st') <- triple c (r st0) st0
+    -- Each loop introduces two new constraints (by applying the consequence
+    -- rule). One states that the precondition implies the loop invariant
+    -- (over the pre-state) and the second states that the body maintains the
+    -- loop invariant.
+    q ==> r st'
+    -- The post-condition of the loop is the loop invariant.
+    pure (r st0, st0)
+  -- Several optimizations are possible in the case of products.
+  Prod c0 c1 ->
+    -- If either multiplicand has no loops, it is sufficient to reason about
+    -- them separately.
+    if loopless c0 || loopless c1
+    then do
+      let Composite st0 st1 = st
+      -- Note that we must add state to the environment: Propositions for
+      -- one command are allowed to refer to the vocabulary of its peer.
+      (q0, st0') <- local (. (`Composite` st1)) (triple c0 p st0)
+      (q1, st1') <- local (. (st0' `Composite`)) (triple c1 q0 st1)
+      pure (q1, Composite st0' st1')
+    -- If both multiplicands have loops, then we will apply isomorphisms to
+    -- group loops together.  Eventually the loop/product isomorphism will
+    -- merge loops.
+    else triple (rewrite c0 c1) p st
 
 rewrite :: Com -> Com -> Com
 rewrite (Loop c0) (Loop c1) = Loop (Prod c0 c1)
@@ -311,44 +336,6 @@ rewrite (Loop c0) c1 = rewrite (Loop c0) (Seq c1 Skip)
 rewrite c0 (Loop c1) = rewrite (Seq c0 Skip) (Loop c1)
 rewrite c0 c1 = Prod c0 c1
 
--- | When a command has no loops, we can fully summarize its effect with a single relational predicate.
-summary :: Com -> St -> M (Prop, St)
-summary c st = case c of
-  -- Skip has no effect.
-  Skip -> pure (T, st)
-  -- Assign generates a fresh variable and sets this fresh variable equal to
-  -- the expression.
-  Assign x a -> do
-    let Singleton m = st
-    v <- state (\ctx -> (varCount ctx, ctx { varCount = varCount ctx + 1 }))
-    let m' = M.insert x v m
-    pure (Eql (erename m' (V x)) (erename m a), Singleton m')
-  -- The effect of an assertion is summarized by the asserted proposition
-  -- itself (over the correct vocabulary).
-  Assert e -> do
-    let Singleton m = st
-    pure (prename m e, st)
-  -- The sequence of two commands is summarized by conjoining the sub-summaries.
-  Seq c0 c1 -> do
-    (p, st') <- summary c0 st
-    (q, st'') <- summary c1 st'
-    pure (p /\ q, st'')
-  -- The sum of two commands is summarized by disjoining the sub-summaries.
-  Sum c0 c1 -> do
-    (p0, st0) <- summary c0 st
-    (p1, st1) <- summary c1 st
-    -- Similar to `triple`, we must ensure that the vocabulary of the two
-    -- output states are resolved into a single vocabulary.
-    let (st', q0, q1) = resolve st0 st1
-    pure ((p0 /\ q0) \/ (p1 /\ q1), st')
-  -- The product of two commands is summarized by conjoining the sub-summaries
-  -- and joining their output vocabularies.
-  Prod c0 c1 -> do
-    let Composite st0 st1 = st
-    (p0, st0') <- summary c0 st0
-    (p1, st1') <- summary c1 st1
-    pure (p0 /\ p1, Composite st0' st1')
-
 -- Given a command, construct a set of constraints that model the command.
 --
 -- This is implemented by simply making a call to `triple` with appropriate
@@ -356,11 +343,12 @@ summary c st = case c of
 hoare :: Com -> [QProp]
 hoare c =
   let voc = S.toList $ cvocab c
+      initialState = Singleton (M.fromList (zip voc (map V voc)))
       ctx = Ctxt
         { relCount = 0
         , varCount = length voc
+        , iState = initialState
         }
-      initialState = Singleton (M.fromList (zip voc [0..]))
    in execWriter $ evalStateT (runReaderT
         (do
           (q, _) <- triple c T initialState
@@ -374,37 +362,20 @@ rel = do
   where
     collapse :: St -> [Expr]
     collapse (Composite st0 st1) = collapse st0 ++ collapse st1
-    collapse (Singleton m) = M.elems (M.mapWithKey (\v n -> V (v ++ "_" ++ show n)) m)
+    collapse (Singleton m) = M.elems (M.mapWithKey (\v n -> n) m)
 
 quantify :: Prop -> QProp
 quantify p = Forall (S.toList (pvocab p)) p
 
 (==>) :: Prop -> Prop -> M ()
-(==>) p q = tell [quantify (p `Impl` q)]
+(==>) p q = tell [quantify (psimp (p `Impl` q))]
 
 equiv :: St -> St -> Prop
-equiv st0 st1 = let (_, p, q) = resolve st0 st1 in p /\ q
-
-resolve :: St -> St -> (St, Prop, Prop)
-resolve (Composite st0 st1) (Composite st0' st1') =
-  let (st0'', p0, p0') = resolve st0 st0'
-      (st1'', p1, p1') = resolve st1 st1'
-  in (Composite st0'' st1'', p0 /\ p1, p0' /\ p1')
-resolve (Singleton m) (Singleton m') =
-  let pairs = M.intersectionWith (,) m m'
-      (m'', (p, p')) = runState (M.traverseWithKey merge pairs) (T, T)
-   in (Singleton m'', p, p')
-    where
-      merge :: Var -> (Int, Int) -> State (Prop, Prop) Int
-      merge v (n, m) = do
-        let eql = Eql (V $ v ++ "_" ++ show n) (V $ v ++ "_" ++ show m)
-        if n > m
-           then modify (\(p, q) -> (p, q /\ eql))
-           else if m > n
-             then modify (\(p, q) -> (p /\ eql, q))
-             else pure ()
-        pure (max n m)
-
+equiv (Composite st0 st1) (Composite st0' st1') = equiv st0 st0' /\ equiv st1 st1'
+equiv (Singleton m0) (Singleton m1) =
+  let vs = S.fromList (M.keys m0) `S.union` S.fromList (M.keys m1)
+      fetch v = M.findWithDefault (V v) v
+   in foldr (/\) T (map (\v -> fetch v m0 `Eql` fetch v m1) (S.toList vs))
 
 showCom :: Com -> String
 showCom = \case
@@ -485,7 +456,7 @@ loopCopy =
     ) `Seq`
   Assert (Ge (V "i") (V "n")) `Seq`
   Assign "s1" (ALit 0) `Seq`
-  Assign "i" (ALit 0) `Seq`
+  Assign "i" (ALit 5) `Seq`
   Loop (Sum ( Assert (Lt (V "i") (V "n")) `Seq`
               Assign "s1" (Add (V "s1") (V "i")) `Seq`
               Assign "i" (Add (V "i") (ALit 1))
