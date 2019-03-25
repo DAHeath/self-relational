@@ -1,5 +1,6 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE MultiWayIf #-}
+{-# LANGUAGE FlexibleContexts #-}
 module Self where
 
 import Control.Monad.State
@@ -10,6 +11,8 @@ import           Data.Set (Set)
 import qualified Data.Map as M
 import           Data.Map (Map)
 import           Data.List (intercalate, nub)
+
+import Debug.Trace
 
 -- | We just use strings as the space of variables.
 type Var = String
@@ -166,22 +169,6 @@ looplessEnd = \case
   Seq _ c1 -> looplessEnd c1
   c -> loopless c
 
--- | Apply the loop merge isomorphism:
--- LOOP { c0 } * LOOP { c1 } = LOOP { c0 * c1 }
---
--- Note that this isomorphism is not valid in full generality. It is valid here
--- because we ensure that all loops are properly constructed to be a
--- disjunction over a loop guard condition.
-mergeLoops :: Com -> Com
-mergeLoops = \case
-  Prod c0 c1 ->
-    let c0' = mergeLoops c0
-        c1' = mergeLoops c1
-    in case (c0', c1') of
-         (Loop c0, Loop c1) -> Loop (c0 `Prod` c1)
-         _ -> Prod c0' c1'
-  c -> c
-
 -- | The space of program states. A state is either a map from variables to the
 -- counter used as a temporary over that variable, or it is a product of two
 -- states.
@@ -208,6 +195,13 @@ data QProp = Forall [Var] Prop
 -- the correct vocabulary.
 type M a = ReaderT (St -> St) (StateT Ctxt (Writer [QProp])) a
 
+copy :: St -> M St
+copy (Composite st0 st1) = Composite <$> copy st0 <*> copy st1
+copy (Singleton m) = Singleton <$> traverse fresh m
+  where
+    fresh _ =
+      state (\ctx -> (varCount ctx, ctx { varCount = varCount ctx + 1 }))
+
 -- | The core operation of this library. Given a command, a precondition, and a
 -- program state (that the precondition is over) the operation computes a
 -- postcondition and a new program state (that the postcondition is over).
@@ -221,7 +215,7 @@ triple c p st
     (q, st') <- summary c st
     pure (p /\ q, st')
   -- First, eagerly try to merge loops together using the loop/product isomorphism.
-  | otherwise = case mergeLoops c of
+  | otherwise = case c of
     -- If the command is a sequence, there are still possibilities for
     -- optimizations despite there being at least one loop.
     Seq c0 c1 ->
@@ -289,27 +283,33 @@ triple c p st
         let Composite st0 st1 = st
         -- Note that we must add state to the environment: Propositions for
         -- one command are allowed to refer to the vocabulary of its peer.
+        sta <- copy st0
+        stb <- copy st1
         (q0, st0') <- local (. (`Composite` st1)) (triple c0 p st0)
-        (q1, st1') <- local (. (st0 `Composite`)) (triple c1 p st1)
-        pure (q0 /\ q1, Composite st0' st1')
-      -- If both multiplicands have loops, then we must rearrange the product
-      -- to bring those loops together. The overall goal is to eventually allow
-      -- `mergeLoops` to eliminate products of loops.
-      else case c1 of
-        -- If one of the multiplicands is a sum, distribute the sum over the product.
-        Sum c1' c1'' -> triple (Sum (Prod c0 c1') (Prod c0 c1'')) p st
-        -- If one of the multiplicands is itself a product, then reassociate.
-        Prod c1' c1'' -> associate (triple (Prod (Prod c0 c1') c1'') p) st
-        -- If one of the multiplicands is a loop, the commute so as to make
-        -- progress on the other multiplicand.
-        Loop c1' -> commute (triple (Prod (Loop c1') c0) p) st
-        -- If one of the multiplicands is a sequence, we distribute the
-        -- sequence over the product while trying to keep loops grouped.
-        Seq c1' c1'' ->
-          if loopless c1'
-          then triple (Seq (Prod Skip c1') (Prod c0 c1'')) p st
-          else triple (Seq (Prod c0 c1') (Prod Skip c1'')) p st
-        _ -> error ("Some impossible state has been reached: `" ++ showCom c ++ "`.")
+        (q1, st1') <- local (. (st0' `Composite`)) (triple c1 q0 st1)
+        pure (q1, Composite st0' st1')
+      -- If both multiplicands have loops, then we will apply isomorphisms to
+      -- group loops together.  Eventually the loop/product isomorphism will
+      -- merge loops.
+      else triple (rewrite c0 c1) p st
+
+rewrite :: Com -> Com -> Com
+rewrite (Loop c0) (Loop c1) = Loop (Prod c0 c1)
+rewrite (Loop c) Skip = Loop (Prod c Skip)
+rewrite Skip (Loop c) = Loop (Prod Skip c)
+rewrite c0 (Sum c1 c2) = Sum (Prod c0 c1) (Prod c0 c2)
+rewrite (Sum c0 c1) c2 = Sum (Prod c0 c2) (Prod c1 c2)
+rewrite c0 (Prod c1 c2) = Prod c0 (rewrite c1 c2)
+rewrite (Prod c0 c1) c2 = Prod (rewrite c0 c1) c2
+rewrite c0 (Seq c1 c2)
+  | loopless c1 = Seq (Prod Skip c1) (Prod c0 c2)
+  | otherwise = Seq (Prod c0 c1) (Prod Skip c2)
+rewrite (Seq c0 c1) c2
+  | loopless c0 = Seq (Prod c0 Skip) (Prod c1 c2)
+  | otherwise = Seq (Prod c0 c2) (Prod c1 Skip)
+rewrite (Loop c0) c1 = rewrite (Loop c0) (Seq c1 Skip)
+rewrite c0 (Loop c1) = rewrite (Seq c0 Skip) (Loop c1)
+rewrite c0 c1 = Prod c0 c1
 
 -- | When a command has no loops, we can fully summarize its effect with a single relational predicate.
 summary :: Com -> St -> M (Prop, St)
@@ -365,14 +365,6 @@ hoare c =
         (do
           (q, _) <- triple c T initialState
           q ==> F) id) ctx
-
-commute, associate :: (St -> M (a, St)) -> St -> M (a, St)
-commute ac (Composite st0 st1) = do
-  (res, Composite st1' st0') <- ac (Composite st1 st0)
-  pure (res, Composite st0' st1')
-associate ac (Composite st0 (Composite st1 st2)) = do
-  (res, Composite (Composite st0' st1') st2') <- ac (Composite (Composite st0 st1) st2)
-  pure (res, Composite st0' (Composite st1' st2'))
 
 rel :: M (St -> Prop)
 rel = do
@@ -492,15 +484,14 @@ loopCopy =
             ) (Assert (Ge (V "i") (V "n")))
     ) `Seq`
   Assert (Ge (V "i") (V "n")) `Seq`
-  Assign "s1" (ALit (-1)) `Seq`
-  Assign "s1" (Add (V "s1") (ALit 1)) `Seq`
-  Assign "i1" (ALit 0) `Seq`
-  Loop (Sum ( Assert (Lt (V "i1") (V "n")) `Seq`
-              Assign "s1" (Add (V "s1") (V "i1")) `Seq`
-              Assign "i1" (Add (V "i1") (ALit 1))
-            ) (Assert (Ge (V "i1") (V "n")))
+  Assign "s1" (ALit 0) `Seq`
+  Assign "i" (ALit 0) `Seq`
+  Loop (Sum ( Assert (Lt (V "i") (V "n")) `Seq`
+              Assign "s1" (Add (V "s1") (V "i")) `Seq`
+              Assign "i" (Add (V "i") (ALit 1))
+            ) (Assert (Ge (V "i") (V "n")))
     ) `Seq`
-  Assert (Ge (V "i1") (V "n")) `Seq`
+  Assert (Ge (V "i") (V "n")) `Seq`
   Assert (Not (Eql (V "s0") (V "s1")))
 
 loopFusion :: Com

@@ -49,24 +49,6 @@ execute independently.
   }{%
     \hoare{P_0 \times P_1}{c_0 \times c_1}{Q_0 \times Q_1}
   }
-  \\
-  \inference[\textsc{Comm}]{%
-    \hoare{\commute~P}{c_1 \times c_0}{\commute~Q}
-  }{%
-    \hoare{P}{c_0 \times c_1}{Q}
-  }
-  \qquad
-  \inference[\textsc{Assoc}]{%
-    \hoare{\associate~P}{(c_0 \times c_1) \times c_2}{\associate~Q}
-  }{%
-    \hoare{P}{c_0 \times (c_1 \times c_2)}{Q}
-  }
-  \\
-  \commute(P) ::= \lambda(\sigma_0 \otimes \sigma_1).~P(\sigma_1 \otimes \sigma_0)
-  \qquad
-  \associate(P) ::=%
-  \lambda((\sigma_0 \otimes \sigma_1) \otimes \sigma_2).~P(\sigma_0
-  \otimes (\sigma_1 \otimes \sigma_2))
 \end{gather*}
 \end{spreadlines}
 \caption{%

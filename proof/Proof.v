@@ -116,6 +116,9 @@ Definition supersedes (c0:com) (c1:com) : Prop :=
 Notation "c0 '~>' c1" := (supersedes c0 c1) (at level 80, right associativity) : type_scope.
 Notation "c0 '~=' c1" := (isomorphic c0 c1) (at level 80, right associativity) : type_scope.
 
+Definition expansive (c:com) : Prop :=
+  (LOOP { c }) ~= (LOOP { c } ;; c).
+
 (** We can sequence skips to the left of commands *)
 Theorem iskipl : forall c, SKIP ;; c ~= c.
 Proof.
@@ -320,6 +323,11 @@ Theorem hoare_prod2 : forall (P0 P1 Q0 Q1 : assertion) c0 c1,
   {{P0}} c0 {{Q0}} ->
   {{P1}} c1 {{Q1}} ->
   {{split P0 P1}} c0 *** c1 {{split Q0 Q1}}.
+Proof.
+  unfold triple, split; intros.
+  inversion H1; subst; clear H1.
+  firstorder.
+Qed.
 
 Theorem hoare_cons : forall (P P' Q Q' : assertion) c,
   (forall st, P st -> P' st) ->
