@@ -1,7 +1,4 @@
 Require Import PeanoNat.
-Require Import Coq.Lists.List.
-Require Import Coq.Arith.Max.
-Require Import Coq.omega.Omega.
 
 (** The space of arithmetic operations. *)
 Inductive aoper :=
@@ -69,7 +66,7 @@ Inductive ceval : com -> state -> state -> Prop :=
  * evaluation is stuck. *)
 | EAssert : forall st (e : assertion),
     e st -> ceval (cassert e) st st
-(* Sequences thread state from between the two commands. *)
+(* Sequences thread state between the two commands. *)
 | ESeq : forall st st' st'' c0 c1,
     ceval c0 st st' ->
     ceval c1 st' st'' ->
@@ -183,6 +180,49 @@ Proof.
   inversion H2; inversion H5; subst; eauto.
 Qed.
 
+Theorem iseq : forall c0 c1 c0' c1',
+  c0 ~= c0' ->
+  c1 ~= c1' ->
+  c0 ;; c1 ~= c0' ;; c1'.
+Proof.
+  unfold isomorphic.
+  split; intros.
+  - inversion H1; subst.
+    econstructor. rewrite <- H. eapply H4.
+    firstorder.
+  - inversion H1; subst.
+    econstructor. rewrite H. eapply H4.
+    firstorder.
+Qed.
+
+Theorem iprod : forall c0 c1 c0' c1',
+  c0 ~= c0' ->
+  c1 ~= c1' ->
+  c0 *** c1 ~= c0' *** c1'.
+Proof.
+  unfold isomorphic.
+  split; intros.
+  - inversion H1; subst.
+    econstructor. rewrite <- H. eapply H4.
+    firstorder.
+  - inversion H1; subst.
+    econstructor. rewrite H. eapply H4.
+    firstorder.
+Qed.
+
+Theorem irefl : forall c, c ~= c.
+Proof.  firstorder. Qed.
+
+Theorem isymm : forall c0 c1, c0 ~= c1 -> c1 ~= c0.
+Proof. firstorder. Qed.
+
+Theorem itrans : forall c0 c1 c2, c0 ~= c1 -> c1 ~= c2 -> c0 ~= c2.
+Proof. unfold isomorphic. firstorder.
+  rewrite <- H0.  rewrite <- H.  eauto.
+  apply H.  apply H0.  eauto.
+Qed.
+
+
 Definition left (P:assertion) st0 : assertion :=
   fun st1 => P (st0 <*> st1).
 
@@ -201,6 +241,12 @@ Definition join (P : assertion) : assertion :=
   | composite st0 st1 => P st0 /\ st0 = st1
   end.
 
+Definition pairwise (P Q : assertion) : assertion :=
+  fun st => match st with
+  | singleton _ => False
+  | composite st0 st1 => P st0 /\ Q st1
+  end.
+
 Definition assn_sub x e P : assertion :=
   fun (st : state) => match st with
   | singleton s => P (singleton (stupdate x (aeval s e) s))
@@ -208,50 +254,23 @@ Definition assn_sub x e P : assertion :=
   | _ <*> _ => False
   end.
 
-Definition commute (P:assertion) : assertion :=
-  fun st => match st with
-            | singleton st => False
-            | composite st0 st1 => P (composite st1 st0)
-            end.
-
-Definition associate (P:assertion) : assertion :=
-  fun st => match st with
-  | composite (composite st0 st1) st2 => P (composite st0 (composite st1 st2))
-  | _ => False
-  end.
-
 Definition triple (P:assertion) (c:com) (Q:assertion) : Prop :=
   forall st st', ceval c st st' -> P st -> Q st'.
 
 Notation "{{ P }} c {{ Q }}" := (triple P c Q) (at level 90, c at next level).
 
-Definition hoare_comm : forall P Q c0 c1,
-  {{commute P}} c1 *** c0 {{commute Q}} ->
-  {{P}} c0 *** c1 {{Q}}.
-Proof.
-  unfold triple, commute; intros.
-  inversion H0; subst; simpl in *.
-  assert (ceval (c1 *** c0) (st2 <*> st1) (st2' <*> st1')); auto.
-  apply (H (st2 <*> st1) (st2' <*> st1') H2).
-  auto.
-Qed.
+Definition bind : assertion :=
+  fun st => match st with
+  | composite st0 st1 => st0 = st1
+  | _ => False
+  end.
 
-Theorem assoc : forall P Q c0 c1 c2,
-  {{ associate P }} cprod (cprod c0 c1) c2 {{ associate Q }} ->
-  {{ P }} cprod c0 (cprod c1 c2) {{ Q }}.
-Proof.
-  unfold triple. intros.
-  inversion H0; subst.
-  inversion H7; subst.
-  assert (ceval (cprod (cprod c0 c1) c2)
-            (composite (composite st1 st0) st3)
-            (composite (composite st1' st1'0) st2'0)).
-  - constructor; auto.
-  - apply (H (composite (composite st1 st0) st3)
-             (composite (composite st1' st1'0) st2'0) H2).
-    unfold associate.
-    assumption.
-Qed.
+Theorem hoare_cons : forall (P P' Q Q' : assertion) c,
+  (forall st, P st -> P' st) ->
+  (forall st, Q' st -> Q st) ->
+  {{P'}} c {{Q'}} ->
+  {{P}} c {{Q}}.
+Proof. firstorder. Qed.
 
 Theorem hoare_supersedes : forall (P Q : assertion) c c',
   c ~> c' -> {{P}} c' {{Q}} -> {{P}} c {{Q}}.
@@ -294,19 +313,60 @@ Proof.
   unfold triple; intros; inversion H1; inversion H5; subst; eauto.
 Qed.
 
-Theorem hoare_seq : forall (P Q R S : assertion) c0 c1,
+Theorem hoare_seq : forall (P Q R : assertion) c0 c1,
+  {{P}} c0 {{R}} ->
+  {{R}} c1 {{Q}} ->
+  {{P}} c0 ;; c1 {{Q}}.
+Proof.
+  unfold triple; intros. inversion H1; firstorder.
+Qed.
+
+Theorem hoare_loop : forall (P : assertion) c,
+  {{P}} c {{P}} ->
+  {{P}} LOOP { c } {{P}}.
+Proof.
+  unfold triple; intros.
+  remember (LOOP { c }) as loop.
+  induction H0; try (inversion Heqloop); clear Heqloop; subst; intuition; eauto.
+Qed.
+
+Theorem hoare_dupl : forall (P Q : assertion) c,
+  {{join P}} c *** c {{join Q}} ->
+  {{P}} c {{Q}}.
+Proof.
+  unfold triple, join; intros.
+  assert (Q st' /\ st' = st').
+  eapply (H (composite st st) (composite st' st')); eauto.
+  eapply H2.
+Qed.
+
+Theorem hoare_dupl' : forall (P Q : assertion) c,
+  {{join P}} c *** c {{pairwise Q Q}} ->
+  {{P}} c {{Q}}.
+Proof.
+  unfold triple, join, pairwise; intros.
+  eapply (H (composite st st) (composite st' st')); eauto.
+Qed.
+
+Theorem hoare_prod_seq : forall (P Q R S : assertion) c0 c1,
   {{join P}} SKIP *** c0 {{R}} ->
   {{R}} c0 *** c1 {{S}} ->
   {{S}} c1 *** SKIP {{join Q}} ->
   {{P}} c0 ;; c1 {{Q}}.
 Proof.
-  unfold triple, join; intros.
-  inversion H2; subst.
-  apply (H1 (st'0 <*> st') (st' <*> st')).
-  econstructor; eauto.
-  eapply H0; eauto.
-  eapply H; eauto.
-  simpl; eauto.
+  intros.
+  eapply hoare_dupl.
+  assert ((c0 ;; c1 *** c0 ;; c1) ~= ((SKIP *** c0) ;; (c0 *** c1) ;; (c1 *** SKIP))).
+  - eapply itrans.
+    { eapply iprod.
+      + eapply isymm. eapply iskipl.
+      + eapply isymm. eapply iseq. eapply irefl. eapply iskipr.  }
+    { eapply itrans.
+      + eapply iseqprod.
+      + eapply iseq. eapply irefl. eapply iseqprod.  }
+  - eapply hoare_iso. eapply H2.
+    eapply hoare_seq; eauto.
+    eapply hoare_seq; eauto.
 Qed.
 
 Theorem hoare_prod : forall (P Q R : assertion) c0 c1,
@@ -317,30 +377,4 @@ Proof.
   unfold triple, left, right; intros.
   inversion H1; subst.
   eauto.
-Qed.
-
-Theorem hoare_prod2 : forall (P0 P1 Q0 Q1 : assertion) c0 c1,
-  {{P0}} c0 {{Q0}} ->
-  {{P1}} c1 {{Q1}} ->
-  {{split P0 P1}} c0 *** c1 {{split Q0 Q1}}.
-Proof.
-  unfold triple, split; intros.
-  inversion H1; subst; clear H1.
-  firstorder.
-Qed.
-
-Theorem hoare_cons : forall (P P' Q Q' : assertion) c,
-  (forall st, P st -> P' st) ->
-  (forall st, Q' st -> Q st) ->
-  {{P'}} c {{Q'}} ->
-  {{P}} c {{Q}}.
-Proof. firstorder. Qed.
-
-Theorem hoare_loop : forall (P : assertion) c,
-  {{P}} c {{P}} ->
-  {{P}} LOOP { c } {{P}}.
-Proof.
-  unfold triple; intros.
-  remember (LOOP { c }) as loop.
-  induction H0; try (inversion Heqloop); clear Heqloop; subst; intuition; eauto.
 Qed.

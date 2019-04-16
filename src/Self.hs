@@ -12,6 +12,8 @@ import qualified Data.Map as M
 import           Data.Map (Map)
 import           Data.List (intercalate, nub, groupBy)
 
+import Debug.Trace
+
 -- | We just use strings as the space of variables.
 type Var = String
 
@@ -273,11 +275,13 @@ triple p c q
           triple p c0 r
           triple r c1 q
         else double $ do
+          traceShowM c0
+          traceShowM c1
           r <- rel
           s <- rel
           triple (joined p) (Prod Skip c0) r
           triple r (Prod c0 c1) s
-          triple s (Prod c1 Skip) (joined q)
+          triple s (Prod c1 Skip) (q *** q)
       Sum c0 c1 -> do
         triple p c0 q
         triple p c1 q

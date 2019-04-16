@@ -1,5 +1,4 @@
 (set-logic HORN)
-(set-option :fixedpoint.engine "duality")
 
 (declare-fun R0 (Int Int Int Int) Bool)
 (declare-fun R1 (Int Int Int Int Int Int Int Int) Bool)

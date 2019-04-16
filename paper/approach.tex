@@ -36,18 +36,30 @@ execute independently.
 \begin{figure}
 \begin{spreadlines}{5pt}
 \begin{gather*}
+  \inference[\textsc{Prod}]{%
+    \forall \sigma_1.
+      \hoare{\aleft\left(P,\sigma_1\right)}
+            {c_0}
+            {\aleft\left(R,\sigma_1\right)}&
+    \forall \sigma_0.
+      \hoare{\aright\left(R,\sigma_0\right)}
+            {c_1}
+            {\aright\left(Q,\sigma_0\right)}
+  }{%
+    \hoare{P}{c_0 \times c_1}{Q}
+  }
+  \\
+  \inference[\textsc{Dupl}]{%
+    \hoare{\ajoin\left(P\right)}{c}{\ajoin\left(Q\right)}
+  }{%
+    \hoare{P}{c}{Q}
+  }
+  \qquad
   \inference[\textsc{Iso}]{%
     c_0 \cong c_1&
     \hoare{P}{c_1}{Q}
   }{%
     \hoare{P}{c_0}{Q}
-  }
-  \qquad
-  \inference[\textsc{Prod}]{%
-    \hoare{P_0}{c_0}{Q_0}&
-    \hoare{P_1}{c_1}{Q_1}
-  }{%
-    \hoare{P_0 \times P_1}{c_0 \times c_1}{Q_0 \times Q_1}
   }
 \end{gather*}
 \end{spreadlines}
@@ -129,21 +141,38 @@ nested products.
   }{%
     \cseq{c}{\cskip} \cong c
   }
+  \qquad
+  \inference[$\textsc{I-SeqAssoc}$]{%
+  }{%
+    \cseq{\left(\cseq{c_0}{c_1}\right)}{c_2}
+    \cong
+    \cseq{c_0}{\left(\cseq{c_1}{c_2}\right)}
+  }
   \\
   \inference[\textsc{I-SeqProd}]{%
   }{%
-    \cprod{(\cseq{c_0}{c_1})}{(\cseq{c_2}{c_3})} \cong
-    \cseq{(\cprod{c_0}{c_2})}{(\cprod{c_1}{c_3})}
+    \cprod{\left(\cseq{c_0}{c_1}\right)}
+          {\left(\cseq{c_2}{c_3}\right)} \cong
+    \cseq{\left(\cprod{c_0}{c_2}\right)}
+         {\left(\cprod{c_1}{c_3}\right)}
   }
   \qquad
-  \inference[\textsc{I-Unroll}]{%
-  }{%
-    \cloop{c} \cong \cloop{\cseq{c}{(\csum{c}{\cskip})}}
-  }
   \inference[\textsc{I-SumProd}]{%
   }{%
     \cprod{(\csum{c_0}{c_1})}{c_2} \cong
     \csum{(\cprod{c_0}{c_2})}{(\cprod{c_1}{c_2})}
+  }
+  \\
+  \inference[\textsc{I-Unroll}]{%
+    \text{TODO legal based on context of $c$}
+  }{%
+    \cloop{c} \cong \cloop{\cseq{c}{c}}
+  }
+  \qquad
+  \inference[\textsc{I-LoopProd}]{%
+    \text{TODO legal based on context of $c_0, c_1$}
+  }{%
+    \cprod{\cloop{c_0}}{\cloop{c_1}} \cong \cloop{\cprod{c_0}{c_1}}
   }
 \end{gather*}
 \end{spreadlines}
@@ -152,6 +181,42 @@ nested products.
   self-relational proof system. Metavariables are consistent with
   \cref{fig:semantics}.
 }
+\end{figure}
+
+\subsection{An Inference Algorithm}
+
+\begin{figure}
+\begin{lstlisting}{haskell}
+{} _ {} :: Assertion -> Com -> Assertion -> ()
+{p} c {q}
+  case reassociate c of
+    c0 ; c1 ->
+      if loopless c0 || loopless c1
+      then do
+        r <- freshPredicate
+        {p} c0 {r}
+        {r} c1 {q}
+      else do
+        r <- freshPredicate
+        s <- freshPredicate
+        {join p} Skip * c0 {r}
+        {r} c0 * c1 {s}
+        {s} c1 * Skip {q * q}
+    c0 + c1 -> do
+      {p} c0 {q}
+      {p} c1 {q}
+    Loop c -> do
+      p ==> q
+      triple {q} c {q}
+    c0 * c1 ->
+      if loopless c0 || loopless c1
+      then do
+        st0 * st1 <- freshState
+        r <- freshPredicate
+        quantifyRight st1 ({p} c0 {r})
+        quantifyLeft st0 ({r} c1 {q})
+      else {p} rewrite c0 c1 {q}
+\end{lstlisting}
 \end{figure}
 
 \end{document}
