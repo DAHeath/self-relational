@@ -50,7 +50,7 @@ execute independently.
   }
   \\
   \inference[\textsc{Dupl}]{%
-    \hoare{\ajoin\left(P\right)}{c}{\ajoin\left(Q\right)}
+    \hoare{\ajoin\left(P\right)}{\cprod{c}{c}}{\ajoin\left(Q\right)}
   }{%
     \hoare{P}{c}{Q}
   }
